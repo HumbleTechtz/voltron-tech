@@ -9,6 +9,8 @@
 # ✅ Loss Protection (FEC + Duplicate)
 # ✅ Traffic Monitoring
 # ✅ Auto Expiry Remover
+# ✅ Uninstall (99) & Exit (00)
+# ✅ GitHub Ready Installation
 # ====================================================
 # Supported OS: Ubuntu 20.04-24.04 | Debian 10-13
 # Architecture: x86_64 | ARM64
@@ -196,6 +198,16 @@ EOF
 configure_ssh() {
     echo -e "${YELLOW}🔧 Configuring SSH...${NC}"
     
+    # Detect SSH service name (sshd or ssh)
+    if systemctl list-units --full -all | grep -q "sshd.service"; then
+        SSH_SERVICE="sshd"
+    elif systemctl list-units --full -all | grep -q "ssh.service"; then
+        SSH_SERVICE="ssh"
+    else
+        echo -e "${YELLOW}⚠️ SSH service not found, but continuing...${NC}"
+        SSH_SERVICE="ssh"
+    fi
+    
     if ! grep -q "^Banner" /etc/ssh/sshd_config; then
         echo "Banner /etc/voltron-tech/banner/ssh-banner" >> /etc/ssh/sshd_config
     else
@@ -211,7 +223,7 @@ configure_ssh() {
     sed -i 's/#ClientAliveInterval 0/ClientAliveInterval 30/' /etc/ssh/sshd_config
     sed -i 's/#ClientAliveCountMax 3/ClientAliveCountMax 3/' /etc/ssh/sshd_config
     
-    systemctl restart sshd
+    systemctl restart $SSH_SERVICE 2>/dev/null || echo -e "${YELLOW}⚠️ Could not restart SSH, but continuing...${NC}"
     echo -e "${GREEN}✅ SSH configured${NC}"
 }
 
@@ -223,13 +235,13 @@ fix_resolved() {
         grep -q '^DNS=' /etc/systemd/resolved.conf \
             && sed -i 's/^DNS=.*/DNS=8.8.8.8 8.8.4.4/' /etc/systemd/resolved.conf \
             || echo "DNS=8.8.8.8 8.8.4.4" >> /etc/systemd/resolved.conf
-        systemctl restart systemd-resolved
-        ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+        systemctl restart systemd-resolved 2>/dev/null || true
+        ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null || true
         echo -e "${GREEN}✅ systemd-resolved configured${NC}"
     fi
 }
 
-# ========== MTU SELECTION (FIXED) ==========
+# ========== MTU SELECTION (FIXED FOR DEBIAN) ==========
 select_mtu() {
     local mtu_choice=""
     
@@ -250,7 +262,12 @@ select_mtu() {
         echo "9) Auto-detect optimal MTU"
         echo ""
         
-        read -p "$(echo -e $GREEN"Choice [1-9]: "$NC)" mtu_choice
+        # Force output to flush
+        sleep 1
+        
+        # Read input properly
+        printf "Choice [1-9]: "
+        read mtu_choice
         
         if [ -z "$mtu_choice" ]; then
             echo -e "${YELLOW}No choice made. Using default MTU 1500${NC}"
@@ -290,7 +307,10 @@ input_subdomain() {
     else
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
         echo -e "${WHITE}Enter your subdomain (e.g., ns.voltron.tech):${NC}"
-        read -p "Subdomain: " SUBDOMAIN
+        
+        sleep 1
+        printf "Subdomain: "
+        read SUBDOMAIN
         
         if [ -z "$SUBDOMAIN" ]; then
             echo -e "${YELLOW}No subdomain entered. Using default: ns.voltron.tech${NC}"
@@ -634,7 +654,7 @@ WantedBy=multi-user.target
 EOF
 }
 
-# ========== LOSS PROTECTION (FIXED) ==========
+# ========== LOSS PROTECTION ==========
 create_loss_protection() {
     cat > /usr/local/bin/voltron-loss <<'EOF'
 #!/bin/bash
@@ -797,7 +817,7 @@ sysctl --system
 
 echo -e "${YELLOW}Restoring SSH configuration...${NC}"
 sed -i '/^Banner/d' /etc/ssh/sshd_config
-systemctl restart sshd
+systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
 
 echo -e "${GREEN}✅ VOLTRON TECH has been uninstalled successfully!${NC}"
 echo -e "${YELLOW}Note: Users were not removed. To remove users manually, use: userdel -r username${NC}"
@@ -1097,7 +1117,7 @@ while true; do
             ;;
         7)
             echo -e "${YELLOW}Restarting services...${NC}"
-            systemctl restart dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss
+            systemctl restart dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss 2>/dev/null || true
             echo -e "${GREEN}✅ Services restarted${NC}"
             read -p "Press Enter to continue..."
             ;;
@@ -1238,6 +1258,7 @@ show_summary() {
 # ========== ASK TO OPEN MENU ==========
 ask_open_menu() {
     if [ $AUTO_INSTALL -eq 0 ]; then
+        echo ""
         read -p "Open menu now? (y/n): " open_menu
         if [ "$open_menu" = "y" ]; then
             voltron
