@@ -9,8 +9,6 @@
 # ✅ Loss Protection (FEC + Duplicate)
 # ✅ Traffic Monitoring
 # ✅ Auto Expiry Remover
-# ✅ Uninstall (99) & Exit (00)
-# ✅ GitHub Ready Installation
 # ====================================================
 # Supported OS: Ubuntu 20.04-24.04 | Debian 10-13
 # Architecture: x86_64 | ARM64
@@ -78,7 +76,6 @@ detect_os() {
     
     echo -e "${GREEN}✅ Detected: $OS_NAME${NC}"
     
-    # Check compatibility
     case $OS in
         ubuntu)
             case $VER in
@@ -205,7 +202,6 @@ configure_ssh() {
         sed -i 's|^Banner.*|Banner /etc/voltron-tech/banner/ssh-banner|' /etc/ssh/sshd_config
     fi
     
-    # Optimize SSH
     sed -i 's/#Port 22/Port 22/' /etc/ssh/sshd_config
     sed -i 's/#MaxAuthTries 6/MaxAuthTries 3/' /etc/ssh/sshd_config
     sed -i 's/#MaxSessions 10/MaxSessions 100/' /etc/ssh/sshd_config
@@ -233,7 +229,7 @@ fix_resolved() {
     fi
 }
 
-# ========== MTU SELECTION ==========
+# ========== MTU SELECTION (FIXED) ==========
 select_mtu() {
     local mtu_choice=""
     
@@ -253,26 +249,35 @@ select_mtu() {
         echo "8) 1800  - Max DNS tunnel"
         echo "9) Auto-detect optimal MTU"
         echo ""
-        read -p "Choice [1-9]: " mtu_choice
         
-        case $mtu_choice in
-            1) MTU=512 ;;
-            2) MTU=800 ;;
-            3) MTU=1000 ;;
-            4) MTU=1200 ;;
-            5) MTU=1500 ;;
-            6) MTU=1600 ;;
-            7) MTU=1700 ;;
-            8) MTU=1800 ;;
-            9) 
-                echo -e "${YELLOW}Detecting optimal MTU...${NC}"
-                MTU=$(ping -M do -s 1472 -c 2 8.8.8.8 2>/dev/null | grep -o "mtu = [0-9]*" | awk '{print $3}' || echo "1500")
-                echo -e "${GREEN}Optimal MTU: $MTU${NC}"
-                ;;
-            *) MTU=1500 ;;
-        esac
+        read -p "$(echo -e $GREEN"Choice [1-9]: "$NC)" mtu_choice
+        
+        if [ -z "$mtu_choice" ]; then
+            echo -e "${YELLOW}No choice made. Using default MTU 1500${NC}"
+            MTU=1500
+        else
+            case $mtu_choice in
+                1) MTU=512 ;;
+                2) MTU=800 ;;
+                3) MTU=1000 ;;
+                4) MTU=1200 ;;
+                5) MTU=1500 ;;
+                6) MTU=1600 ;;
+                7) MTU=1700 ;;
+                8) MTU=1800 ;;
+                9) 
+                    echo -e "${YELLOW}Detecting optimal MTU...${NC}"
+                    MTU=$(ping -M do -s 1472 -c 2 8.8.8.8 2>/dev/null | grep -o "mtu = [0-9]*" | awk '{print $3}' || echo "1500")
+                    echo -e "${GREEN}Optimal MTU: $MTU${NC}"
+                    ;;
+                *) 
+                    echo -e "${YELLOW}Invalid choice. Using default MTU 1500${NC}"
+                    MTU=1500 
+                    ;;
+            esac
+        fi
     fi
-    
+
     echo "$MTU" > /etc/voltron-tech/config/mtu
     echo -e "${GREEN}✅ MTU set to: $MTU${NC}"
 }
@@ -286,6 +291,11 @@ input_subdomain() {
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
         echo -e "${WHITE}Enter your subdomain (e.g., ns.voltron.tech):${NC}"
         read -p "Subdomain: " SUBDOMAIN
+        
+        if [ -z "$SUBDOMAIN" ]; then
+            echo -e "${YELLOW}No subdomain entered. Using default: ns.voltron.tech${NC}"
+            SUBDOMAIN="ns.voltron.tech"
+        fi
     fi
     
     echo "$SUBDOMAIN" > /etc/voltron-tech/config/subdomain
@@ -296,7 +306,6 @@ input_subdomain() {
 optimize_kernel() {
     echo -e "${YELLOW}⚙️ Applying kernel optimizations for MTU $MTU...${NC}"
     
-    # Calculate optimal buffers
     local RMEM_MAX=$((MTU * 20000))
     local WMEM_MAX=$((MTU * 20000))
     
@@ -365,7 +374,6 @@ EOF
 
     sysctl -p /etc/sysctl.d/99-voltron.conf 2>/dev/null || true
     
-    # Load BBR module
     modprobe tcp_bbr 2>/dev/null || true
     echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null || true
     
@@ -379,16 +387,9 @@ optimize_interface() {
     if [ -n "$IFACE" ]; then
         echo -e "${YELLOW}🔧 Optimizing interface $IFACE for MTU $MTU...${NC}"
         
-        # Set MTU
         ip link set dev $IFACE mtu $MTU 2>/dev/null || echo -e "${YELLOW}⚠️ Could not set MTU on interface${NC}"
-        
-        # Set queue length
         ip link set dev $IFACE txqueuelen $((MTU * 10)) 2>/dev/null || true
-        
-        # Disable offloading
         ethtool -K $IFACE tx off sg off tso off gso off gro off lro off 2>/dev/null || true
-        
-        # Increase ring buffer
         ethtool -G $IFACE rx 4096 tx 4096 2>/dev/null || true
         
         echo -e "${GREEN}✅ Interface optimized${NC}"
@@ -399,7 +400,6 @@ optimize_interface() {
 install_dnstt() {
     echo -e "${YELLOW}📦 Installing DNSTT server for $ARCH_TYPE...${NC}"
     
-    # Download based on architecture
     case $ARCH_TYPE in
         amd64)
             curl -L -o /tmp/dnstt.tar.gz https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz
@@ -414,7 +414,6 @@ install_dnstt() {
     cp server_linux_* /usr/local/bin/dnstt-server 2>/dev/null || true
     chmod +x /usr/local/bin/dnstt-server
     
-    # Generate keys
     cd /etc/dnstt
     /usr/local/bin/dnstt-server -gen-key -privkey-file server.key -pubkey-file server.pub
     cd ~
@@ -635,7 +634,7 @@ WantedBy=multi-user.target
 EOF
 }
 
-# ========== LOSS PROTECTION (FIXED VERSION - HII NDIYO IMEKUWA INAKOSA) ==========
+# ========== LOSS PROTECTION (FIXED) ==========
 create_loss_protection() {
     cat > /usr/local/bin/voltron-loss <<'EOF'
 #!/bin/bash
@@ -648,9 +647,8 @@ mkdir -p $FEC_DB
 calculate_fec() {
     local loss=$1
     local mtu=$2
-    local result="1.0"  # Default value
+    local result="1.0"
     
-    # Make sure loss is a number
     if ! [[ "$loss" =~ ^[0-9]+$ ]]; then
         loss=0
     fi
@@ -694,9 +692,8 @@ calculate_fec() {
 calculate_duplicate() {
     local loss=$1
     local mtu=$2
-    local result="1"  # Default value
+    local result="1"
     
-    # Make sure loss is a number
     if ! [[ "$loss" =~ ^[0-9]+$ ]]; then
         loss=0
     fi
@@ -730,10 +727,8 @@ while true; do
     echo "$LOSS $MTU $FEC_RATIO $DUP_LEVEL" > $FEC_DB/current
     echo "$(date) Loss:$LOSS% MTU:$MTU FEC:$FEC_RATIO DUP:$DUP_LEVEL" >> $LOG_FILE
     
-    # Apply iptables marks for duplication
     iptables -t mangle -F 2>/dev/null
     
-    # Mark critical packets
     if [ $DUP_LEVEL -gt 1 ]; then
         iptables -t mangle -A OUTPUT -p tcp --tcp-flags SYN SYN -j MARK --set-mark $DUP_LEVEL
         iptables -t mangle -A OUTPUT -p udp --dport 53 -j MARK --set-mark $DUP_LEVEL
@@ -843,7 +838,6 @@ add_user() {
     read -p "$(echo -e $GREEN"Expire days: "$NC)" days
     read -p "$(echo -e $GREEN"Traffic limit (MB, 0 for unlimited): "$NC)" traffic_limit
     
-    # Validate inputs
     if [ -z "$username" ] || [ -z "$password" ] || [ -z "$days" ]; then
         echo -e "${RED}❌ All fields required!${NC}"
         return
@@ -859,15 +853,12 @@ add_user() {
         return
     fi
     
-    # Create user
     useradd -m -s /bin/false "$username"
     echo "$username:$password" | chpasswd
     
-    # Set expiry
     expire_date=$(date -d "+$days days" +"%Y-%m-%d")
     chage -E "$(date -d "$expire_date" +"%Y-%m-%d")" "$username"
     
-    # Save user info
     cat > $UD/$username <<INFO
 Username: $username
 Password: $password
@@ -878,7 +869,6 @@ INFO
     
     echo "0" > $TD/$username
     
-    # Get server info
     SERVER=$(cat /etc/voltron-tech/config/subdomain 2>/dev/null || echo "Not configured")
     PUBKEY=$(cat /etc/dnstt/server.pub 2>/dev/null || echo "Not generated")
     
@@ -923,7 +913,6 @@ list_users() {
         if passwd -S "$u" 2>/dev/null | grep -q "L"; then
             st="${RED}LOCKED${NC}"
         else
-            # Check if expired
             current=$(date +%s)
             exp=$(date -d "$ex" +%s 2>/dev/null || echo "0")
             if [ $exp -le $current ] 2>/dev/null; then
@@ -1019,7 +1008,6 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; PURPLE='\033[0;35m'
 WHITE='\033[1;37m'; BOLD='\033[1m'; NC='\033[0m'
 
-# ========== QUOTE FUNCTION ==========
 show_quote() {
     echo ""
     echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════╗${NC}"
@@ -1030,22 +1018,18 @@ show_quote() {
     echo ""
 }
 
-# ========== DASHBOARD ==========
 show_dashboard() {
     clear
     
-    # Get system info
     IP=$(curl -s ifconfig.me 2>/dev/null || echo "Unknown")
     SUB=$(cat /etc/voltron-tech/config/subdomain 2>/dev/null || echo "Not configured")
     MTU=$(cat /etc/voltron-tech/config/mtu 2>/dev/null || echo "1500")
     
-    # Service status
     DNS=$(systemctl is-active dnstt-voltron 2>/dev/null | grep -q active && echo "${GREEN}●${NC}" || echo "${RED}●${NC}")
     PRX=$(systemctl is-active voltron-proxy 2>/dev/null | grep -q active && echo "${GREEN}●${NC}" || echo "${RED}●${NC}")
     LOS=$(systemctl is-active voltron-loss 2>/dev/null | grep -q active && echo "${GREEN}●${NC}" || echo "${RED}●${NC}")
     TRF=$(systemctl is-active voltron-traffic 2>/dev/null | grep -q active && echo "${GREEN}●${NC}" || echo "${RED}●${NC}")
     
-    # Get loss info
     LOSS="N/A"
     FEC="N/A"
     DUP="N/A"
@@ -1053,7 +1037,6 @@ show_dashboard() {
         read LOSS CURRENT_MTU FEC DUP < /etc/voltron-tech/fec/current 2>/dev/null || true
     fi
     
-    # Get BBR status
     BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
     
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
@@ -1083,7 +1066,6 @@ show_dashboard() {
     echo ""
 }
 
-# ========== MAIN LOOP ==========
 while true; do
     show_dashboard
     read -p "$(echo -e $GREEN"Select option: "$NC)" choice
@@ -1207,7 +1189,6 @@ configure_firewall() {
     iptables -P FORWARD DROP 2>/dev/null || true
     iptables -P OUTPUT ACCEPT 2>/dev/null || true
     
-    # Save rules
     netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true
     
     echo -e "${GREEN}✅ Firewall configured${NC}"
