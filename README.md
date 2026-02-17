@@ -14,4 +14,4 @@
 
 ### Option 1: Direct Install
 ```bash
-apt update && apt install -y curl && bash <(curl -s https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/refs/heads/main/slowdns-manager.sh)
+wget -qO- https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/main/slowdns-manager.sh | bash
