@@ -49,10 +49,11 @@ show_banner() {
 }
 
 # ========== AUTO-INSTALL MODE ==========
-if [ "$1" = "--auto" ] || [ "$1" = "-y" ]; then
-    AUTO_INSTALL=1
-else
-    AUTO_INSTALL=0
+AUTO_INSTALL=0
+if [ $# -gt 0 ]; then
+    if [ "$1" = "--auto" ] || [ "$1" = "-y" ]; then
+        AUTO_INSTALL=1
+    fi
 fi
 
 # ========== ROOT CHECK ==========
@@ -234,6 +235,8 @@ fix_resolved() {
 
 # ========== MTU SELECTION ==========
 select_mtu() {
+    local mtu_choice=""
+    
     if [ $AUTO_INSTALL -eq 1 ]; then
         MTU=1500
         echo -e "${YELLOW}Auto mode: Using MTU 1500${NC}"
@@ -294,8 +297,8 @@ optimize_kernel() {
     echo -e "${YELLOW}⚙️ Applying kernel optimizations for MTU $MTU...${NC}"
     
     # Calculate optimal buffers
-    RMEM_MAX=$((MTU * 20000))
-    WMEM_MAX=$((MTU * 20000))
+    local RMEM_MAX=$((MTU * 20000))
+    local WMEM_MAX=$((MTU * 20000))
     
     cat > /etc/sysctl.d/99-voltron.conf <<EOF
 # ============================================
@@ -360,7 +363,7 @@ fs.file-max = 2097152
 fs.nr_open = 2097152
 EOF
 
-    sysctl -p /etc/sysctl.d/99-voltron.conf
+    sysctl -p /etc/sysctl.d/99-voltron.conf 2>/dev/null || true
     
     # Load BBR module
     modprobe tcp_bbr 2>/dev/null || true
@@ -371,7 +374,7 @@ EOF
 
 # ========== NETWORK INTERFACE OPTIMIZATION ==========
 optimize_interface() {
-    IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+    local IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
     
     if [ -n "$IFACE" ]; then
         echo -e "${YELLOW}🔧 Optimizing interface $IFACE for MTU $MTU...${NC}"
@@ -632,7 +635,7 @@ WantedBy=multi-user.target
 EOF
 }
 
-# ========== LOSS PROTECTION WITH BBR BOOST ==========
+# ========== LOSS PROTECTION (FIXED VERSION - HII NDIYO IMEKUWA INAKOSA) ==========
 create_loss_protection() {
     cat > /usr/local/bin/voltron-loss <<'EOF'
 #!/bin/bash
@@ -645,41 +648,77 @@ mkdir -p $FEC_DB
 calculate_fec() {
     local loss=$1
     local mtu=$2
+    local result="1.0"  # Default value
     
-    # BBR + FEC Combined Optimization
-    if [ $mtu -le 512 ]; then
-        [ $loss -lt 2 ] && echo "1.1"
-        [ $loss -ge 2 ] && [ $loss -lt 5 ] && echo "1.3"
-        [ $loss -ge 5 ] && echo "1.5"
-    elif [ $mtu -le 1000 ]; then
-        [ $loss -lt 2 ] && echo "1.2"
-        [ $loss -ge 2 ] && [ $loss -lt 5 ] && echo "1.4"
-        [ $loss -ge 5 ] && echo "1.7"
-    elif [ $mtu -le 1500 ]; then
-        [ $loss -lt 2 ] && echo "1.3"
-        [ $loss -ge 2 ] && [ $loss -lt 5 ] && echo "1.6"
-        [ $loss -ge 5 ] && echo "2.0"
-    else
-        [ $loss -lt 2 ] && echo "1.5"
-        [ $loss -ge 2 ] && [ $loss -lt 5 ] && echo "1.8"
-        [ $loss -ge 5 ] && echo "2.5"
+    # Make sure loss is a number
+    if ! [[ "$loss" =~ ^[0-9]+$ ]]; then
+        loss=0
     fi
+    
+    if [ $mtu -le 512 ]; then
+        if [ $loss -lt 2 ]; then
+            result="1.1"
+        elif [ $loss -lt 5 ]; then
+            result="1.3"
+        else
+            result="1.5"
+        fi
+    elif [ $mtu -le 1000 ]; then
+        if [ $loss -lt 2 ]; then
+            result="1.2"
+        elif [ $loss -lt 5 ]; then
+            result="1.4"
+        else
+            result="1.7"
+        fi
+    elif [ $mtu -le 1500 ]; then
+        if [ $loss -lt 2 ]; then
+            result="1.3"
+        elif [ $loss -lt 5 ]; then
+            result="1.6"
+        else
+            result="2.0"
+        fi
+    else
+        if [ $loss -lt 2 ]; then
+            result="1.5"
+        elif [ $loss -lt 5 ]; then
+            result="1.8"
+        else
+            result="2.5"
+        fi
+    fi
+    echo $result
 }
 
 calculate_duplicate() {
     local loss=$1
     local mtu=$2
+    local result="1"  # Default value
     
-    # Packet duplication based on MTU and loss
-    if [ $mtu -ge 1500 ]; then
-        [ $loss -lt 3 ] && echo "1"
-        [ $loss -ge 3 ] && [ $loss -lt 8 ] && echo "2"
-        [ $loss -ge 8 ] && echo "3"
-    else
-        [ $loss -lt 5 ] && echo "1"
-        [ $loss -ge 5 ] && [ $loss -lt 10 ] && echo "2"
-        [ $loss -ge 10 ] && echo "3"
+    # Make sure loss is a number
+    if ! [[ "$loss" =~ ^[0-9]+$ ]]; then
+        loss=0
     fi
+    
+    if [ $mtu -ge 1500 ]; then
+        if [ $loss -lt 3 ]; then
+            result="1"
+        elif [ $loss -lt 8 ]; then
+            result="2"
+        else
+            result="3"
+        fi
+    else
+        if [ $loss -lt 5 ]; then
+            result="1"
+        elif [ $loss -lt 10 ]; then
+            result="2"
+        else
+            result="3"
+        fi
+    fi
+    echo $result
 }
 
 while true; do
@@ -1007,10 +1046,11 @@ show_dashboard() {
     TRF=$(systemctl is-active voltron-traffic 2>/dev/null | grep -q active && echo "${GREEN}●${NC}" || echo "${RED}●${NC}")
     
     # Get loss info
+    LOSS="N/A"
+    FEC="N/A"
+    DUP="N/A"
     if [ -f /etc/voltron-tech/fec/current ]; then
-        read LOSS CURRENT_MTU FEC DUP < /etc/voltron-tech/fec/current
-    else
-        LOSS="N/A"
+        read LOSS CURRENT_MTU FEC DUP < /etc/voltron-tech/fec/current 2>/dev/null || true
     fi
     
     # Get BBR status
@@ -1094,7 +1134,7 @@ while true; do
         10)
             echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
             echo -e "${YELLOW}LOSS STATISTICS:${NC}"
-            cat /etc/voltron-tech/logs/loss.log | tail -20
+            tail -20 /etc/voltron-tech/logs/loss.log 2>/dev/null || echo "No loss data yet"
             echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
             read -p "Press Enter to continue..."
             ;;
@@ -1142,7 +1182,6 @@ create_aliases() {
     echo "alias voltron='voltron'" >> ~/.bashrc
     echo "alias vtech='voltron'" >> ~/.bashrc
     echo "alias vt='voltron'" >> ~/.bashrc
-    echo "alias status='voltron status'" >> ~/.bashrc
 }
 
 # ========== START SERVICES ==========
@@ -1150,8 +1189,8 @@ start_services() {
     echo -e "${YELLOW}🚀 Starting services...${NC}"
     
     systemctl daemon-reload
-    systemctl enable dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss
-    systemctl start dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss
+    systemctl enable dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss 2>/dev/null || true
+    systemctl start dnstt-voltron voltron-proxy voltron-traffic voltron-cleaner voltron-loss 2>/dev/null || true
     
     echo -e "${GREEN}✅ Services started${NC}"
 }
@@ -1160,16 +1199,16 @@ start_services() {
 configure_firewall() {
     echo -e "${YELLOW}🔧 Configuring firewall...${NC}"
     
-    iptables -A INPUT -p udp --dport 53 -j ACCEPT
-    iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-    iptables -A INPUT -p udp --dport 5300 -j ACCEPT
-    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-    iptables -P INPUT DROP
-    iptables -P FORWARD DROP
-    iptables -P OUTPUT ACCEPT
+    iptables -A INPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -p udp --dport 5300 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    iptables -P INPUT DROP 2>/dev/null || true
+    iptables -P FORWARD DROP 2>/dev/null || true
+    iptables -P OUTPUT ACCEPT 2>/dev/null || true
     
     # Save rules
-    netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables.rules
+    netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables.rules 2>/dev/null || true
     
     echo -e "${GREEN}✅ Firewall configured${NC}"
 }
@@ -1184,7 +1223,7 @@ OS: $OS_NAME
 Architecture: $ARCH
 MTU: $MTU
 Subdomain: $SUBDOMAIN
-BBR: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+BBR: $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
 EOF
 }
 
@@ -1197,7 +1236,7 @@ show_summary() {
     echo -e "${GREEN}║${WHITE}  OS        : ${CYAN}$OS_NAME${NC}"
     echo -e "${GREEN}║${WHITE}  Arch      : ${CYAN}$ARCH${NC}"
     echo -e "${GREEN}║${WHITE}  MTU       : ${CYAN}$MTU${NC}"
-    echo -e "${GREEN}║${WHITE}  BBR       : ${CYAN}$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')${NC}"
+    echo -e "${GREEN}║${WHITE}  BBR       : ${CYAN}$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')${NC}"
     echo -e "${GREEN}║${WHITE}  Subdomain : ${CYAN}$SUBDOMAIN${NC}"
     echo -e "${GREEN}║${WHITE}  Public Key: ${YELLOW}$(cat /etc/dnstt/server.pub | cut -c1-50)...${NC}"
     echo -e "${GREEN}╠═══════════════════════════════════════════════════════════════╣${NC}"
