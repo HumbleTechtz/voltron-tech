@@ -199,21 +199,23 @@ configure_ssh() {
     echo -e "${YELLOW}🔧 Configuring SSH...${NC}"
     
     # Detect SSH service name (sshd or ssh)
-    if systemctl list-units --full -all | grep -q "sshd.service"; then
+    SSH_SERVICE="ssh"
+    if systemctl list-units --full -all 2>/dev/null | grep -q "sshd.service"; then
         SSH_SERVICE="sshd"
-    elif systemctl list-units --full -all | grep -q "ssh.service"; then
+    elif systemctl list-units --full -all 2>/dev/null | grep -q "ssh.service"; then
         SSH_SERVICE="ssh"
     else
         echo -e "${YELLOW}⚠️ SSH service not found, but continuing...${NC}"
-        SSH_SERVICE="ssh"
     fi
     
+    # Configure SSH banner
     if ! grep -q "^Banner" /etc/ssh/sshd_config; then
         echo "Banner /etc/voltron-tech/banner/ssh-banner" >> /etc/ssh/sshd_config
     else
         sed -i 's|^Banner.*|Banner /etc/voltron-tech/banner/ssh-banner|' /etc/ssh/sshd_config
     fi
     
+    # Optimize SSH settings
     sed -i 's/#Port 22/Port 22/' /etc/ssh/sshd_config
     sed -i 's/#MaxAuthTries 6/MaxAuthTries 3/' /etc/ssh/sshd_config
     sed -i 's/#MaxSessions 10/MaxSessions 100/' /etc/ssh/sshd_config
@@ -223,7 +225,11 @@ configure_ssh() {
     sed -i 's/#ClientAliveInterval 0/ClientAliveInterval 30/' /etc/ssh/sshd_config
     sed -i 's/#ClientAliveCountMax 3/ClientAliveCountMax 3/' /etc/ssh/sshd_config
     
-    systemctl restart $SSH_SERVICE 2>/dev/null || echo -e "${YELLOW}⚠️ Could not restart SSH, but continuing...${NC}"
+    # Restart SSH service if found
+    if [ -n "$SSH_SERVICE" ]; then
+        systemctl restart $SSH_SERVICE 2>/dev/null || true
+    fi
+    
     echo -e "${GREEN}✅ SSH configured${NC}"
 }
 
@@ -262,11 +268,8 @@ select_mtu() {
         echo "9) Auto-detect optimal MTU"
         echo ""
         
-        # Force output to flush
-        sleep 1
-        
-        # Read input properly
-        printf "Choice [1-9]: "
+        # Force output to flush and read properly
+        echo -n "Choice [1-9]: "
         read mtu_choice
         
         if [ -z "$mtu_choice" ]; then
@@ -308,8 +311,7 @@ input_subdomain() {
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
         echo -e "${WHITE}Enter your subdomain (e.g., ns.voltron.tech):${NC}"
         
-        sleep 1
-        printf "Subdomain: "
+        echo -n "Subdomain: "
         read SUBDOMAIN
         
         if [ -z "$SUBDOMAIN" ]; then
