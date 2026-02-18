@@ -7,7 +7,7 @@ fi
 
 echo "Installing FirewallFalcon Manager..."
 
-MENU_URL="https://raw.githubusercontent.com/firewallfalcons/FirewallFalcon-Manager/main/menu.sh"
+MENU_URL="https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/refs/heads/main/main.sh"
 
 wget -q -O /usr/local/bin/menu "$MENU_URL"
 chmod +x /usr/local/bin/menu
