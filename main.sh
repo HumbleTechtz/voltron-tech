@@ -21,11 +21,9 @@ C_STATUS_A=$C_GREEN
 C_STATUS_I=$C_DIM
 C_ACCENT=$C_CYAN
 
-# ========== VOLTRON TECH CLOUDFLARE CONFIGURATION ==========
-CLOUDFLARE_EMAIL="voltrontechtx@gmail.com"
-CLOUDFLARE_ZONE_ID="1ce2d01c4d1678c91a08db8c7a780c81"
-CLOUDFLARE_API_TOKEN="4kgAiZpUPvOi7mdmRD1gnCcn6xnH_Yu-8N7IdhHD"
-DOMAIN="voltrontechtx.shop"
+# ========== VOLTRON TECH CONFIGURATION ==========
+DESEC_TOKEN="c2e8c4545e8a4838c2fabc376fc6c88fbc1b"
+DESEC_DOMAIN="voltrontechtx.shop"
 
 DB_DIR="/etc/voltrontech"
 DB_FILE="$DB_DIR/users.db"
@@ -63,6 +61,7 @@ UNINSTALL_MODE="interactive"
 
 # ========== INPUT BUFFER CLEANING FUNCTION ==========
 clean_input_buffer() {
+    # Safisha input buffer kabla ya kusoma
     while read -r -t 0; do read -r; done 2>/dev/null
 }
 
@@ -75,69 +74,6 @@ safe_read() {
         read -p "$prompt" "$var_name"
     else
         read "$var_name"
-    fi
-}
-
-# ========== CLOUDFLARE DNS FUNCTIONS ==========
-create_cloudflare_dns_record() {
-    local record_type="$1"
-    local record_name="$2"
-    local record_content="$3"
-    local record_ttl="${4:-3600}"
-    local record_proxied="${5:-false}"
-    
-    echo -e "${C_BLUE}📝 Creating $record_type record for $record_name...${C_RESET}"
-    
-    local response
-    response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{
-            \"type\": \"$record_type\",
-            \"name\": \"$record_name\",
-            \"content\": \"$record_content\",
-            \"ttl\": $record_ttl,
-            \"proxied\": $record_proxied
-        }")
-    
-    if echo "$response" | grep -q '"success":true'; then
-        local record_id
-        record_id=$(echo "$response" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-        echo "$record_id"
-        return 0
-    else
-        echo -e "${C_RED}❌ Failed to create DNS record: $response${C_RESET}"
-        return 1
-    fi
-}
-
-delete_cloudflare_dns_record() {
-    local record_id="$1"
-    
-    echo -e "${C_BLUE}🗑️ Deleting DNS record $record_id...${C_RESET}"
-    
-    curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$record_id" \
-        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        -H "Content-Type: application/json" > /dev/null
-    
-    echo -e "${C_GREEN}✅ DNS record deleted${C_RESET}"
-}
-
-get_cloudflare_dns_record_id() {
-    local record_name="$1"
-    local record_type="${2:-A}"
-    
-    local response
-    response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=$record_type&name=$record_name" \
-        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-        -H "Content-Type: application/json")
-    
-    if echo "$response" | grep -q '"success":true'; then
-        local record_id
-        record_id=$(echo "$response" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        echo "$record_id"
-    else
-        echo ""
     fi
 }
 
@@ -154,6 +90,7 @@ install_voltron_booster() {
         echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
     fi
 
+    # Add BBR to sysctl
     cat >> /etc/sysctl.conf <<EOF
 # VOLTRON TECH BOOSTER - BBR
 net.core.default_qdisc = fq
@@ -236,6 +173,7 @@ while true; do
 
     echo "$LOSS $MTU $FEC_RATIO" > "$FEC_DIR/current"
 
+    # Apply packet duplication for high loss
     if [ $LOSS -gt 8 ]; then
         iptables -t mangle -A OUTPUT -p tcp --tcp-flags SYN SYN -j MARK --set-mark 3 2>/dev/null
         iptables -t mangle -A OUTPUT -p udp --dport 53 -j MARK --set-mark 3 2>/dev/null
@@ -320,73 +258,62 @@ EOF
 
 # ========== MTU SELECTION MENU ==========
 mtu_optimization_menu() {
-    while true; do
-        clear
-        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "${C_BOLD}${C_PURPLE}           📡 VOLTRON TECH MTU OPTIMIZATION${C_RESET}"
-        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo ""
-        echo -e "${C_GREEN}Current MTU:${C_RESET} $(ip link | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
-        echo -e "${C_GREEN}Current BBR:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
-        echo -e "${C_GREEN}Loss Protection:${C_RESET} $(systemctl is-active voltron-loss-protect 2>/dev/null || echo "inactive")"
-        echo ""
-        echo -e "${C_YELLOW}Select MTU optimization level:${C_RESET}"
-        echo ""
-        echo -e "  ${C_GREEN}1)${C_RESET} MTU 512   - Best for high loss networks (>10%)"
-        echo -e "  ${C_GREEN}2)${C_RESET} MTU 800   - Optimized for mobile networks"
-        echo -e "  ${C_GREEN}3)${C_RESET} MTU 1000  - Balanced performance"
-        echo -e "  ${C_GREEN}4)${C_RESET} MTU 1200  - Good for stable connections"
-        echo -e "  ${C_GREEN}5)${C_RESET} MTU 1500  - Standard Ethernet"
-        echo -e "  ${C_GREEN}6)${C_RESET} MTU 1600  - Jumbo Frame Lite"
-        echo -e "  ${C_GREEN}7)${C_RESET} MTU 1700  - Jumbo Frame Medium"
-        echo -e "  ${C_GREEN}8)${C_RESET} MTU 1800  - Max DNS Tunnel MTU"
-        echo -e "  ${C_GREEN}9)${C_RESET} Auto-detect optimal MTU"
-        echo -e "  ${C_GREEN}10)${C_RESET} View Current MTU Settings"
-        echo -e "  ${C_GREEN}11)${C_RESET} Restart Loss Protection"
-        echo -e "  ${C_RED}0)${C_RESET} Return to Main Menu"
-        echo ""
-        
-        local choice
-        safe_read "$(echo -e ${C_PROMPT}"👉 Select option: "${C_RESET})" choice
-        
-        case $choice in
-            1) apply_mtu_optimization 512 ;;
-            2) apply_mtu_optimization 800 ;;
-            3) apply_mtu_optimization 1000 ;;
-            4) apply_mtu_optimization 1200 ;;
-            5) apply_mtu_optimization 1500 ;;
-            6) apply_mtu_optimization 1600 ;;
-            7) apply_mtu_optimization 1700 ;;
-            8) apply_mtu_optimization 1800 ;;
-            9) auto_detect_mtu ;;
-            10) show_mtu_settings ;;
-            11) systemctl restart voltron-loss-protect; echo -e "${C_GREEN}✅ Loss Protection restarted${C_RESET}"; sleep 2 ;;
-            0) return ;;
-            *) echo -e "${C_RED}❌ Invalid option!${C_RESET}" && sleep 2 ;;
-        esac
-    done
+    clear
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}           📡 VOLTRON TECH MTU OPTIMIZATION${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo ""
+    echo -e "${C_GREEN}Current MTU:${C_RESET} $(ip link | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
+    echo -e "${C_GREEN}Current BBR:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
+    echo ""
+    echo -e "${C_YELLOW}Select MTU optimization level:${C_RESET}"
+    echo ""
+    echo -e "  ${C_GREEN}1)${C_RESET} MTU 512   - Best for high loss networks (>10%)"
+    echo -e "  ${C_GREEN}2)${C_RESET} MTU 800   - Optimized for mobile networks"
+    echo -e "  ${C_GREEN}3)${C_RESET} MTU 1000  - Balanced performance"
+    echo -e "  ${C_GREEN}4)${C_RESET} MTU 1200  - Good for stable connections"
+    echo -e "  ${C_GREEN}5)${C_RESET} MTU 1500  - Standard Ethernet"
+    echo -e "  ${C_GREEN}6)${C_RESET} MTU 1600  - Jumbo Frame Lite"
+    echo -e "  ${C_GREEN}7)${C_RESET} MTU 1700  - Jumbo Frame Medium"
+    echo -e "  ${C_GREEN}8)${C_RESET} MTU 1800  - Max DNS Tunnel MTU"
+    echo -e "  ${C_GREEN}9)${C_RESET} Auto-detect optimal MTU"
+    echo -e "  ${C_GREEN}10)${C_RESET} View Current MTU Settings"
+    echo -e "  ${C_RED}0)${C_RESET} Return"
+    echo ""
+
+    local choice
+    safe_read "👉 Select option: " choice
+
+    case $choice in
+        1) apply_mtu_optimization 512 ;;
+        2) apply_mtu_optimization 800 ;;
+        3) apply_mtu_optimization 1000 ;;
+        4) apply_mtu_optimization 1200 ;;
+        5) apply_mtu_optimization 1500 ;;
+        6) apply_mtu_optimization 1600 ;;
+        7) apply_mtu_optimization 1700 ;;
+        8) apply_mtu_optimization 1800 ;;
+        9) auto_detect_mtu ;;
+        10) show_mtu_settings ;;
+        0) return ;;
+        *) echo -e "${C_RED}❌ Invalid option!${C_RESET}" && sleep 2 ;;
+    esac
 }
 
 apply_mtu_optimization() {
     local mtu=$1
     echo -e "\n${C_BLUE}⚡ Applying MTU $mtu optimization...${C_RESET}"
-    
+
     local iface=$(ip route | grep default | awk '{print $5}' | head -1)
     if [ -n "$iface" ]; then
         ip link set dev $iface mtu $mtu 2>/dev/null
         echo -e "${C_GREEN}✅ Interface $iface MTU set to $mtu${C_RESET}"
     fi
-    
+
+    # Update sysctl for this MTU
     local mss=$((mtu - 40))
     sysctl -w net.ipv4.tcp_base_mss=$mss >/dev/null 2>&1
-    
-    if [ -f "$DNSTT_SERVICE_FILE" ]; then
-        sed -i "s/-mtu [0-9]*/-mtu $mtu/" "$DNSTT_SERVICE_FILE"
-        systemctl daemon-reload
-        systemctl restart dnstt.service
-        echo -e "${C_GREEN}✅ DNSTT service updated to MTU $mtu${C_RESET}"
-    fi
-    
+
     echo -e "${C_GREEN}✅ MTU optimization complete for $mtu${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -405,7 +332,6 @@ show_mtu_settings() {
     echo -e "  ${C_CYAN}TCP Base MSS:${C_RESET} $(sysctl net.ipv4.tcp_base_mss 2>/dev/null | awk '{print $3}')"
     echo -e "  ${C_CYAN}TCP Congestion:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
     echo -e "  ${C_CYAN}MTU Probing:${C_RESET} $(sysctl net.ipv4.tcp_mtu_probing 2>/dev/null | awk '{print $3}')"
-    echo -e "  ${C_CYAN}Loss Protection:${C_RESET} $(systemctl is-active voltron-loss-protect 2>/dev/null || echo "inactive")"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
 }
@@ -592,12 +518,10 @@ initial_setup() {
     touch "$DB_FILE"
     mkdir -p "$SSL_CERT_DIR"
     
-    # Save Cloudflare credentials
-    cat > "$DB_DIR/cloudflare.conf" <<EOF
-CLOUDFLARE_EMAIL="$CLOUDFLARE_EMAIL"
-CLOUDFLARE_ZONE_ID="$CLOUDFLARE_ZONE_ID"
-CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN"
-DOMAIN="$DOMAIN"
+    # Save DESEC credentials
+    cat > "$DB_DIR/desec.conf" <<EOF
+DESEC_TOKEN="$DESEC_TOKEN"
+DESEC_DOMAIN="$DESEC_DOMAIN"
 EOF
     
     setup_limiter_service
@@ -605,15 +529,22 @@ EOF
         touch "$INSTALL_FLAG_FILE"
     fi
     
+    # Install booster automatically
     install_voltron_booster
 }
 
-# ========== CLOUDFLARE DNS MANAGEMENT ==========
 generate_dns_record() {
-    echo -e "\n${C_BLUE}⚙️ Generating random subdomains for Cloudflare...${C_RESET}"
+    echo -e "\n${C_BLUE}⚙️ Generating a random domain...${C_RESET}"
+    if ! command -v jq &> /dev/null; then
+        echo -e "${C_YELLOW}⚠️ jq not found, attempting to install...${C_RESET}"
+        apt-get update > /dev/null 2>&1 && apt-get install -y jq || {
+            echo -e "${C_RED}❌ Failed to install jq. Cannot manage DNS records.${C_RESET}"
+            return 1
+        }
+    fi
     
-    # Load Cloudflare credentials
-    source "$DB_DIR/cloudflare.conf"
+    # Load DESEC credentials
+    source "$DB_DIR/desec.conf"
     
     local SERVER_IPV4
     SERVER_IPV4=$(curl -s -4 icanhazip.com)
@@ -622,47 +553,42 @@ generate_dns_record() {
         return 1
     fi
 
-    local RANDOM_STR1
-    RANDOM_STR1=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-    local RANDOM_STR2
-    RANDOM_STR2=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-    
-    local NS_SUBDOMAIN="ns-$RANDOM_STR1"
-    local TUNNEL_SUBDOMAIN="tun-$RANDOM_STR2"
-    local NS_DOMAIN="$NS_SUBDOMAIN.$DOMAIN"
-    local TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DOMAIN"
-    
-    echo -e "${C_BLUE}📝 Creating A record for $NS_DOMAIN...${C_RESET}"
-    local ns_record_id
-    ns_record_id=$(create_cloudflare_dns_record "A" "$NS_SUBDOMAIN" "$SERVER_IPV4")
-    if [ $? -ne 0 ] || [ -z "$ns_record_id" ]; then
-        echo -e "${C_RED}❌ Failed to create A record for nameserver${C_RESET}"
-        return 1
+    local SERVER_IPV6
+    SERVER_IPV6=$(curl -s -6 icanhazip.com --max-time 5)
+
+    local RANDOM_SUBDOMAIN="vps-$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)"
+    local FULL_DOMAIN="$RANDOM_SUBDOMAIN.$DESEC_DOMAIN"
+    local HAS_IPV6="false"
+
+    local API_DATA
+    API_DATA=$(printf '[{"subname": "%s", "type": "A", "ttl": 3600, "records": ["%s"]}]' "$RANDOM_SUBDOMAIN" "$SERVER_IPV4")
+
+    if [[ -n "$SERVER_IPV6" ]]; then
+        local aaaa_record
+        aaaa_record=$(printf ',{"subname": "%s", "type": "AAAA", "ttl": 3600, "records": ["%s"]}' "$RANDOM_SUBDOMAIN" "$SERVER_IPV6")
+        API_DATA="${API_DATA%?}${aaaa_record}]"
+        HAS_IPV6="true"
     fi
+
+    local CREATE_RESPONSE
+    CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/" \
+        -H "Authorization: Token $DESEC_TOKEN" -H "Content-Type: application/json" \
+        --data "$API_DATA")
     
-    echo -e "${C_BLUE}📝 Creating NS record for $TUNNEL_DOMAIN pointing to $NS_DOMAIN...${C_RESET}"
-    local ns_record_content="$NS_DOMAIN"
-    local tunnel_record_id
-    tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$ns_record_content")
-    if [ $? -ne 0 ] || [ -z "$tunnel_record_id" ]; then
-        echo -e "${C_RED}❌ Failed to create NS record for tunnel${C_RESET}"
-        # Clean up the A record
-        delete_cloudflare_dns_record "$ns_record_id"
+    local HTTP_CODE=${CREATE_RESPONSE: -3}
+    local RESPONSE_BODY=${CREATE_RESPONSE:0:${#CREATE_RESPONSE}-3}
+
+    if [[ "$HTTP_CODE" -ne 201 ]]; then
+        echo -e "${C_RED}❌ Failed to create DNS records. API returned HTTP $HTTP_CODE.${C_RESET}"
         return 1
     fi
     
     cat > "$DNS_INFO_FILE" <<-EOF
-NS_SUBDOMAIN="$NS_SUBDOMAIN"
-TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
-NS_DOMAIN="$NS_DOMAIN"
-TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
-NS_RECORD_ID="$ns_record_id"
-TUNNEL_RECORD_ID="$tunnel_record_id"
+SUBDOMAIN="$RANDOM_SUBDOMAIN"
+FULL_DOMAIN="$FULL_DOMAIN"
+HAS_IPV6="$HAS_IPV6"
 EOF
-    
-    echo -e "\n${C_GREEN}✅ Successfully created DNS records in Cloudflare!${C_RESET}"
-    echo -e "  - Nameserver: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-    echo -e "  - Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    echo -e "\n${C_GREEN}✅ Successfully created domain: ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
 }
 
 delete_dns_record() {
@@ -671,46 +597,49 @@ delete_dns_record() {
         return
     fi
     
-    # Load Cloudflare credentials
-    source "$DB_DIR/cloudflare.conf"
+    # Load DESEC credentials
+    source "$DB_DIR/desec.conf"
     
-    echo -e "\n${C_BLUE}🗑️ Deleting DNS records from Cloudflare...${C_RESET}"
+    echo -e "\n${C_BLUE}🗑️ Deleting DNS records...${C_RESET}"
     source "$DNS_INFO_FILE"
-    
-    if [[ -n "$TUNNEL_RECORD_ID" ]]; then
-        delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
-    fi
-    
-    if [[ -n "$NS_RECORD_ID" ]]; then
-        delete_cloudflare_dns_record "$NS_RECORD_ID"
+    if [[ -z "$SUBDOMAIN" ]]; then
+        echo -e "${C_RED}❌ Could not read record details from config file. Skipping deletion.${C_RESET}"
+        return
     fi
 
-    echo -e "\n${C_GREEN}✅ Deleted DNS records${C_RESET}"
+    curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$SUBDOMAIN/A/" \
+         -H "Authorization: Token $DESEC_TOKEN" > /dev/null
+
+    if [[ "$HAS_IPV6" == "true" ]]; then
+        curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$SUBDOMAIN/AAAA/" \
+             -H "Authorization: Token $DESEC_TOKEN" > /dev/null
+    fi
+
+    echo -e "\n${C_GREEN}✅ Deleted domain: ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
     rm -f "$DNS_INFO_FILE"
 }
 
 dns_menu() {
     clear
     show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 VOLTRON TECH DNS Domain Management (Cloudflare) ---${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 VOLTRON TECH DNS Domain Management ---${C_RESET}"
     if [ -f "$DNS_INFO_FILE" ]; then
         source "$DNS_INFO_FILE"
-        echo -e "\nℹ️ DNS records already exist for this server:"
-        echo -e "  - ${C_CYAN}Nameserver:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-        echo -e "  - ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        echo -e "\nℹ️ A domain already exists for this server:"
+        echo -e "  - ${C_CYAN}Domain:${C_RESET} ${C_YELLOW}$FULL_DOMAIN${C_RESET}"
         echo
         local choice
-        safe_read "👉 Do you want to DELETE these records? (y/n): " choice
+        safe_read "👉 Do you want to DELETE this domain? (y/n): " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
             delete_dns_record
         else
             echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
         fi
     else
-        echo -e "\nℹ️ No DNS records have been created yet."
+        echo -e "\nℹ️ No domain has been generated for this server yet."
         echo
         local choice
-        safe_read "👉 Do you want to generate new DNS records in Cloudflare? (y/n): " choice
+        safe_read "👉 Do you want to generate a new random domain now? (y/n): " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
             generate_dns_record
         else
@@ -721,7 +650,6 @@ dns_menu() {
     safe_read "" dummy
 }
 
-# ========== USER MANAGEMENT FUNCTIONS ==========
 _select_user_interface() {
     local title="$1"
     clear
@@ -1209,12 +1137,13 @@ restore_user_data() {
     mkdir -p "$DB_DIR"
     cp "$restored_db_file" "$DB_FILE"
     
+    # Restore other config files if they exist
     [ -d "$temp_dir/voltrontech/ssl" ] && cp -r "$temp_dir/voltrontech/ssl" "$DB_DIR/"
     [ -d "$temp_dir/voltrontech/dnstt" ] && cp -r "$temp_dir/voltrontech/dnstt" "$DB_DIR/"
     [ -f "$temp_dir/voltrontech/dns_info.conf" ] && cp "$temp_dir/voltrontech/dns_info.conf" "$DB_DIR/"
     [ -f "$temp_dir/voltrontech/dnstt_info.conf" ] && cp "$temp_dir/voltrontech/dnstt_info.conf" "$DB_DIR/"
     [ -f "$temp_dir/voltrontech/voltronproxy_config.conf" ] && cp "$temp_dir/voltrontech/voltronproxy_config.conf" "$DB_DIR/"
-    [ -f "$temp_dir/voltrontech/cloudflare.conf" ] && cp "$temp_dir/voltrontech/cloudflare.conf" "$DB_DIR/"
+    [ -f "$temp_dir/voltrontech/desec.conf" ] && cp "$temp_dir/voltrontech/desec.conf" "$DB_DIR/"
     
     echo -e "${C_BLUE}⚙️ Re-synchronizing system accounts with the restored database...${C_RESET}"
     
@@ -1660,8 +1589,8 @@ install_dnstt() {
         return
     fi
     
-    # Load Cloudflare credentials
-    source "$DB_DIR/cloudflare.conf"
+    # Load DESEC credentials
+    source "$DB_DIR/desec.conf"
     
     echo -e "${C_GREEN}⚙️ Forcing release of Port 53 (stopping systemd-resolved)...${C_RESET}"
     systemctl stop systemd-resolved >/dev/null 2>&1
@@ -1720,19 +1649,19 @@ install_dnstt() {
     fi
     local FORWARD_TARGET="127.0.0.1:$forward_port"
     
-    local DNS_METHOD="auto"
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
-    
-    echo -e "\n${C_BLUE}DNS Record Creation Method:${C_RESET}"
-    echo -e "  ${C_GREEN}1)${C_RESET} Auto-generate with Cloudflare (recommended)"
-    echo -e "  ${C_GREEN}2)${C_RESET} Use custom domains (manual)"
-    
-    local dns_method_choice
-    safe_read "👉 Enter your choice [1]: " dns_method_choice
-    dns_method_choice=${dns_method_choice:-1}
-    
-    if [[ "$dns_method_choice" == "2" ]]; then
+    local DNSTT_RECORDS_MANAGED="true"
+    local NS_SUBDOMAIN=""
+    local TUNNEL_SUBDOMAIN=""
+    local HAS_IPV6="false"
+
+    local dns_choice
+    safe_read "👉 Auto-generate DNS records or use custom ones? (auto/custom) [auto]: " dns_choice
+    dns_choice=${dns_choice:-auto}
+
+    if [[ "$dns_choice" == "custom" ]]; then
+        DNSTT_RECORDS_MANAGED="false"
         safe_read "👉 Enter your full nameserver domain (e.g., ns1.yourdomain.com): " NS_DOMAIN
         if [[ -z "$NS_DOMAIN" ]]; then
             echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"
@@ -1744,55 +1673,48 @@ install_dnstt() {
             return
         fi
     else
-        echo -e "\n${C_BLUE}⚙️ Generating random subdomains in Cloudflare...${C_RESET}"
-        
+        echo -e "\n${C_BLUE}⚙️ Configuring DNS records for DNSTT...${C_RESET}"
         local SERVER_IPV4
         SERVER_IPV4=$(curl -s -4 icanhazip.com)
         if ! _is_valid_ipv4 "$SERVER_IPV4"; then
-            echo -e "\n${C_RED}❌ Error: Could not retrieve a valid public IPv4 address.${C_RESET}"
+            echo -e "\n${C_RED}❌ Error: Could not retrieve a valid public IPv4 address from icanhazip.com.${C_RESET}"
             return 1
+        fi
+        
+        local SERVER_IPV6
+        SERVER_IPV6=$(curl -s -6 icanhazip.com --max-time 5)
+        
+        local RANDOM_STR
+        RANDOM_STR=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+        NS_SUBDOMAIN="ns-$RANDOM_STR"
+        TUNNEL_SUBDOMAIN="tun-$RANDOM_STR"
+        NS_DOMAIN="$NS_SUBDOMAIN.$DESEC_DOMAIN"
+        TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DESEC_DOMAIN"
+
+        local API_DATA
+        API_DATA=$(printf '[{"subname": "%s", "type": "A", "ttl": 3600, "records": ["%s"]}, {"subname": "%s", "type": "NS", "ttl": 3600, "records": ["%s."]}]' \
+            "$NS_SUBDOMAIN" "$SERVER_IPV4" "$TUNNEL_SUBDOMAIN" "$NS_DOMAIN")
+
+        if [[ -n "$SERVER_IPV6" ]]; then
+            local aaaa_record
+            aaaa_record=$(printf ',{"subname": "%s", "type": "AAAA", "ttl": 3600, "records": ["%s"]}' "$NS_SUBDOMAIN" "$SERVER_IPV6")
+            API_DATA="${API_DATA%?}${aaaa_record}]"
+            HAS_IPV6="true"
         fi
 
-        local RANDOM_STR1
-        RANDOM_STR1=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-        local RANDOM_STR2
-        RANDOM_STR2=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+        local CREATE_RESPONSE
+        CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/" \
+            -H "Authorization: Token $DESEC_TOKEN" -H "Content-Type: application/json" \
+            --data "$API_DATA")
         
-        NS_SUBDOMAIN="ns-$RANDOM_STR1"
-        TUNNEL_SUBDOMAIN="tun-$RANDOM_STR2"
-        NS_DOMAIN="$NS_SUBDOMAIN.$DOMAIN"
-        TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DOMAIN"
-        
-        echo -e "${C_BLUE}📝 Creating A record for $NS_DOMAIN...${C_RESET}"
-        local ns_record_id
-        ns_record_id=$(create_cloudflare_dns_record "A" "$NS_SUBDOMAIN" "$SERVER_IPV4")
-        if [ $? -ne 0 ] || [ -z "$ns_record_id" ]; then
-            echo -e "${C_RED}❌ Failed to create A record for nameserver${C_RESET}"
+        local HTTP_CODE=${CREATE_RESPONSE: -3}
+        local RESPONSE_BODY=${CREATE_RESPONSE:0:${#CREATE_RESPONSE}-3}
+
+        if [[ "$HTTP_CODE" -ne 201 ]]; then
+            echo -e "${C_RED}❌ Failed to create DNSTT records. API returned HTTP $HTTP_CODE.${C_RESET}"
+            echo "Response: $RESPONSE_BODY" | jq
             return 1
         fi
-        
-        echo -e "${C_BLUE}📝 Creating NS record for $TUNNEL_DOMAIN pointing to $NS_DOMAIN...${C_RESET}"
-        local ns_record_content="$NS_DOMAIN"
-        local tunnel_record_id
-        tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$ns_record_content")
-        if [ $? -ne 0 ] || [ -z "$tunnel_record_id" ]; then
-            echo -e "${C_RED}❌ Failed to create NS record for tunnel${C_RESET}"
-            delete_cloudflare_dns_record "$ns_record_id"
-            return 1
-        fi
-        
-        cat > "$DNS_INFO_FILE" <<-EOF
-NS_SUBDOMAIN="$NS_SUBDOMAIN"
-TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
-NS_DOMAIN="$NS_DOMAIN"
-TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
-NS_RECORD_ID="$ns_record_id"
-TUNNEL_RECORD_ID="$tunnel_record_id"
-EOF
-        
-        echo -e "\n${C_GREEN}✅ Successfully created DNS records in Cloudflare!${C_RESET}"
-        echo -e "  - Nameserver: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-        echo -e "  - Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
     fi
 
     local mtu_value
@@ -1855,10 +1777,14 @@ WantedBy=multi-user.target
 EOF
     echo -e "\n${C_BLUE}💾 Saving configuration and starting service...${C_RESET}"
     cat > "$DNSTT_CONFIG_FILE" <<-EOF
+NS_SUBDOMAIN="$NS_SUBDOMAIN"
+TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
 NS_DOMAIN="$NS_DOMAIN"
 TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
 PUBLIC_KEY="$PUBLIC_KEY"
 FORWARD_DESC="$forward_desc"
+DNSTT_RECORDS_MANAGED="$DNSTT_RECORDS_MANAGED"
+HAS_IPV6="$HAS_IPV6"
 MTU_VALUE="$mtu_value"
 EOF
     systemctl daemon-reload
@@ -1881,8 +1807,8 @@ uninstall_dnstt() {
         return
     fi
     
-    # Load Cloudflare credentials
-    source "$DB_DIR/cloudflare.conf"
+    # Load DESEC credentials
+    source "$DB_DIR/desec.conf"
     
     local confirm="y"
     if [[ "$UNINSTALL_MODE" != "silent" ]]; then
@@ -1895,23 +1821,23 @@ uninstall_dnstt() {
     echo -e "${C_BLUE}🛑 Stopping and disabling DNSTT service...${C_RESET}"
     systemctl stop dnstt.service > /dev/null 2>&1
     systemctl disable dnstt.service > /dev/null 2>&1
-    
-    # Delete DNS records if they exist
-    if [ -f "$DNS_INFO_FILE" ]; then
-        source "$DNS_INFO_FILE"
-        echo -e "${C_BLUE}🗑️ Removing DNS records from Cloudflare...${C_RESET}"
-        
-        if [[ -n "$TUNNEL_RECORD_ID" ]]; then
-            delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+    if [ -f "$DNSTT_CONFIG_FILE" ]; then
+        source "$DNSTT_CONFIG_FILE"
+        if [[ "$DNSTT_RECORDS_MANAGED" == "true" ]]; then
+            echo -e "${C_BLUE}🗑️ Removing auto-generated DNS records...${C_RESET}"
+            curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$TUNNEL_SUBDOMAIN/NS/" \
+                 -H "Authorization: Token $DESEC_TOKEN" > /dev/null
+            curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$NS_SUBDOMAIN/A/" \
+                 -H "Authorization: Token $DESEC_TOKEN" > /dev/null
+            if [[ "$HAS_IPV6" == "true" ]]; then
+                curl -s -X DELETE "https://desec.io/api/v1/domains/$DESEC_DOMAIN/rrsets/$NS_SUBDOMAIN/AAAA/" \
+                     -H "Authorization: Token $DESEC_TOKEN" > /dev/null
+            fi
+            echo -e "${C_GREEN}✅ DNS records have been removed.${C_RESET}"
+        else
+            echo -e "${C_YELLOW}⚠️ DNS records were manually configured. Please delete them from your DNS provider.${C_RESET}"
         fi
-        
-        if [[ -n "$NS_RECORD_ID" ]]; then
-            delete_cloudflare_dns_record "$NS_RECORD_ID"
-        fi
-        
-        rm -f "$DNS_INFO_FILE"
     fi
-    
     echo -e "${C_BLUE}🗑️ Removing service files and binaries...${C_RESET}"
     rm -f "$DNSTT_SERVICE_FILE"
     rm -f "$DNSTT_BINARY"
@@ -2554,7 +2480,7 @@ show_banner() {
     
     local managed_domain="Not Generated"
     if [ -f "$DNS_INFO_FILE" ]; then
-        managed_domain=$(grep 'TUNNEL_DOMAIN' "$DNS_INFO_FILE" | cut -d'=' -f2 | tr -d '"')
+        managed_domain=$(grep 'FULL_DOMAIN' "$DNS_INFO_FILE" | cut -d'"' -f2)
     fi
 
     clear
@@ -2781,6 +2707,99 @@ dt_proxy_menu() {
             *) echo -e "\n${C_RED}❌ Invalid option.${C_RESET}" && sleep 2 ;;
         esac
     done
+}
+
+mtu_optimization_menu() {
+    while true; do
+        clear
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}           📡 VOLTRON TECH MTU OPTIMIZATION${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo ""
+        echo -e "${C_GREEN}Current MTU:${C_RESET} $(ip link | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
+        echo -e "${C_GREEN}Current BBR:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
+        echo -e "${C_GREEN}Loss Protection:${C_RESET} $(systemctl is-active voltron-loss-protect 2>/dev/null || echo "inactive")"
+        echo ""
+        echo -e "${C_YELLOW}Select MTU optimization level:${C_RESET}"
+        echo ""
+        echo -e "  ${C_GREEN}1)${C_RESET} MTU 512   - Best for high loss networks (>10%)"
+        echo -e "  ${C_GREEN}2)${C_RESET} MTU 800   - Optimized for mobile networks"
+        echo -e "  ${C_GREEN}3)${C_RESET} MTU 1000  - Balanced performance"
+        echo -e "  ${C_GREEN}4)${C_RESET} MTU 1200  - Good for stable connections"
+        echo -e "  ${C_GREEN}5)${C_RESET} MTU 1500  - Standard Ethernet"
+        echo -e "  ${C_GREEN}6)${C_RESET} MTU 1600  - Jumbo Frame Lite"
+        echo -e "  ${C_GREEN}7)${C_RESET} MTU 1700  - Jumbo Frame Medium"
+        echo -e "  ${C_GREEN}8)${C_RESET} MTU 1800  - Max DNS Tunnel MTU"
+        echo -e "  ${C_GREEN}9)${C_RESET} Auto-detect optimal MTU"
+        echo -e "  ${C_GREEN}10)${C_RESET} View Current MTU Settings"
+        echo -e "  ${C_GREEN}11)${C_RESET} Restart Loss Protection"
+        echo -e "  ${C_RED}0)${C_RESET} Return to Main Menu"
+        echo ""
+        
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select option: "${C_RESET})" choice
+        
+        case $choice in
+            1) apply_mtu_optimization 512 ;;
+            2) apply_mtu_optimization 800 ;;
+            3) apply_mtu_optimization 1000 ;;
+            4) apply_mtu_optimization 1200 ;;
+            5) apply_mtu_optimization 1500 ;;
+            6) apply_mtu_optimization 1600 ;;
+            7) apply_mtu_optimization 1700 ;;
+            8) apply_mtu_optimization 1800 ;;
+            9) auto_detect_mtu ;;
+            10) show_mtu_settings ;;
+            11) systemctl restart voltron-loss-protect; echo -e "${C_GREEN}✅ Loss Protection restarted${C_RESET}"; sleep 2 ;;
+            0) return ;;
+            *) echo -e "${C_RED}❌ Invalid option!${C_RESET}" && sleep 2 ;;
+        esac
+    done
+}
+
+apply_mtu_optimization() {
+    local mtu=$1
+    echo -e "\n${C_BLUE}⚡ Applying MTU $mtu optimization...${C_RESET}"
+    
+    local iface=$(ip route | grep default | awk '{print $5}' | head -1)
+    if [ -n "$iface" ]; then
+        ip link set dev $iface mtu $mtu 2>/dev/null
+        echo -e "${C_GREEN}✅ Interface $iface MTU set to $mtu${C_RESET}"
+    fi
+    
+    # Update sysctl for this MTU
+    local mss=$((mtu - 40))
+    sysctl -w net.ipv4.tcp_base_mss=$mss >/dev/null 2>&1
+    
+    # Update DNSTT service if exists
+    if [ -f "$DNSTT_SERVICE_FILE" ]; then
+        sed -i "s/-mtu [0-9]*/-mtu $mtu/" "$DNSTT_SERVICE_FILE"
+        systemctl daemon-reload
+        systemctl restart dnstt.service
+        echo -e "${C_GREEN}✅ DNSTT service updated to MTU $mtu${C_RESET}"
+    fi
+    
+    echo -e "${C_GREEN}✅ MTU optimization complete for $mtu${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+auto_detect_mtu() {
+    echo -e "\n${C_BLUE}🔍 Detecting optimal MTU...${C_RESET}"
+    local mtu=$(ping -M do -s 1472 -c 2 8.8.8.8 2>/dev/null | grep -o "mtu = [0-9]*" | awk '{print $3}' || echo "1500")
+    echo -e "${C_GREEN}✅ Optimal MTU detected: $mtu${C_RESET}"
+    apply_mtu_optimization $mtu
+}
+
+show_mtu_settings() {
+    echo -e "\n${C_BLUE}📊 Current MTU Settings:${C_RESET}"
+    echo -e "  ${C_CYAN}Interface MTU:${C_RESET} $(ip link | grep mtu | head -1 | grep -oP 'mtu \K\d+')"
+    echo -e "  ${C_CYAN}TCP Base MSS:${C_RESET} $(sysctl net.ipv4.tcp_base_mss 2>/dev/null | awk '{print $3}')"
+    echo -e "  ${C_CYAN}TCP Congestion:${C_RESET} $(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')"
+    echo -e "  ${C_CYAN}MTU Probing:${C_RESET} $(sysctl net.ipv4.tcp_mtu_probing 2>/dev/null | awk '{print $3}')"
+    echo -e "  ${C_CYAN}Loss Protection:${C_RESET} $(systemctl is-active voltron-loss-protect 2>/dev/null || echo "inactive")"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 uninstall_script() {
