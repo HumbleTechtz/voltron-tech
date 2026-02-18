@@ -646,6 +646,8 @@ generate_dns_record() {
     tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$ns_record_content")
     if [ $? -ne 0 ] || [ -z "$tunnel_record_id" ]; then
         echo -e "${C_RED}❌ Failed to create NS record for tunnel${C_RESET}"
+        # Clean up the A record
+        delete_cloudflare_dns_record "$ns_record_id"
         return 1
     fi
     
@@ -1775,7 +1777,6 @@ install_dnstt() {
         tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$ns_record_content")
         if [ $? -ne 0 ] || [ -z "$tunnel_record_id" ]; then
             echo -e "${C_RED}❌ Failed to create NS record for tunnel${C_RESET}"
-            # Clean up the A record
             delete_cloudflare_dns_record "$ns_record_id"
             return 1
         fi
