@@ -247,7 +247,7 @@ fix_resolved() {
     fi
 }
 
-# ========== MTU SELECTION (FIXED FOR DEBIAN) ==========
+# ========== MTU SELECTION (FIXED) ==========
 select_mtu() {
     local mtu_choice=""
     
@@ -268,9 +268,9 @@ select_mtu() {
         echo "9) Auto-detect optimal MTU"
         echo ""
         
-        # Force output to flush and read properly
-        echo -n "Choice [1-9]: "
-        read mtu_choice
+        # Force output to tty
+        echo -n "Choice [1-9]: " > /dev/tty
+        read mtu_choice < /dev/tty
         
         if [ -z "$mtu_choice" ]; then
             echo -e "${YELLOW}No choice made. Using default MTU 1500${NC}"
@@ -311,8 +311,8 @@ input_subdomain() {
         echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
         echo -e "${WHITE}Enter your subdomain (e.g., ns.voltron.tech):${NC}"
         
-        echo -n "Subdomain: "
-        read SUBDOMAIN
+        echo -n "Subdomain: " > /dev/tty
+        read SUBDOMAIN < /dev/tty
         
         if [ -z "$SUBDOMAIN" ]; then
             echo -e "${YELLOW}No subdomain entered. Using default: ns.voltron.tech${NC}"
