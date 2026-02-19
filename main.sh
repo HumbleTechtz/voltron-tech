@@ -2115,6 +2115,15 @@ dt_proxy_menu() {
     done
 }
 
+# ========== CHECK DT PROXY STATUS ==========
+check_dt_proxy_status() {
+    if [ -f "/usr/local/bin/main" ]; then
+        echo -e "${C_BLUE}(installed)${C_RESET}"
+    else
+        echo ""
+    fi
+}
+
 # ========== SHOW DNSTT DETAILS (PUBLIC KEY INAONEKANA) ==========
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
@@ -2137,16 +2146,7 @@ show_dnstt_details() {
     fi
 }
 
-# ========== CHECK DT PROXY STATUS ==========
-check_dt_proxy_status() {
-    if [ -f "/usr/local/bin/main" ]; then
-        echo -e "${C_BLUE}(installed)${C_RESET}"
-    else
-        echo ""
-    fi
-}
-
-# ========== INSTALL DNSTT (FIXED - PUBLIC KEY ITAFANYA KAZI!) ==========
+# ========== INSTALL DNSTT (KAMA FALCON - PUBLIC KEY ITAFANYA KAZI!) ==========
 install_dnstt() {
     clear
     show_banner
@@ -2302,60 +2302,21 @@ install_dnstt() {
     chmod +x "$DNSTT_BINARY"
     echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
     
-    # Generate keys with proper error handling
+    # Generate keys (KAMA FALCON - RAHISI NA SAWA!)
     echo -e "\n${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
-    chmod 700 "$DNSTT_KEYS_DIR"
-    
-    # Check if binary exists and is executable
-    if [ ! -f "$DNSTT_BINARY" ]; then
-        echo -e "\n${C_RED}❌ DNSTT binary not found!${C_RESET}"
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-        return
-    fi
-    
-    if [ ! -x "$DNSTT_BINARY" ]; then
-        chmod +x "$DNSTT_BINARY"
-    fi
-    
-    # Generate keys with explicit paths
-    echo -e "${C_YELLOW}Generating keys...${C_RESET}"
     "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
     
-    # Check if keys were created successfully
-    if [ ! -f "$DNSTT_KEYS_DIR/server.pub" ] || [ ! -f "$DNSTT_KEYS_DIR/server.key" ]; then
-        echo -e "\n${C_RED}❌ Failed to generate keys. Trying alternative method...${C_RESET}"
-        
-        # Alternative method - try with full path and different directory
-        cd /tmp
-        "$DNSTT_BINARY" -gen-key -privkey-file server.key -pubkey-file server.pub
-        
-        if [ -f /tmp/server.pub ] && [ -f /tmp/server.key ]; then
-            cp /tmp/server.pub "$DNSTT_KEYS_DIR/server.pub"
-            cp /tmp/server.key "$DNSTT_KEYS_DIR/server.key"
-            rm -f /tmp/server.pub /tmp/server.key
-            echo -e "${C_GREEN}✅ Keys generated successfully with alternative method!${C_RESET}"
-        else
-            echo -e "\n${C_RED}❌ Still failed to generate keys.${C_RESET}"
-            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-            safe_read "" dummy
-            return
-        fi
-        cd - > /dev/null
-    fi
-    
-    # Read the public key
-    if [ -f "$DNSTT_KEYS_DIR/server.pub" ]; then
-        PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
-        echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
-        echo -e "${C_YELLOW}Public Key: ${PUBLIC_KEY}${C_RESET}"
-    else
-        echo -e "\n${C_RED}❌ Could not read public key.${C_RESET}"
+    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+        echo -e "\n${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
         safe_read "" dummy
         return
     fi
+    
+    local PUBLIC_KEY
+    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
+    echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
     
     # Create systemd service
     echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
