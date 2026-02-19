@@ -714,15 +714,36 @@ _select_user_interface() {
     done
 }
 
+# ========== GET USER STATUS (IMPROVED) ==========
 get_user_status() {
     local username="$1"
-    if ! id "$username" &>/dev/null; then echo -e "${C_RED}Not Found${C_RESET}"; return; fi
+    
+    # Check if user exists in system
+    if ! id "$username" &>/dev/null; then 
+        echo -e "${C_RED}NOT FOUND${C_RESET}"
+        return
+    fi
+    
+    # Get expiry date from database
     local expiry_date=$(grep "^$username:" "$DB_FILE" | cut -d: -f3)
-    if passwd -S "$username" 2>/dev/null | grep -q " L "; then echo -e "${C_YELLOW}🔒 Locked${C_RESET}"; return; fi
+    
+    # Check if user is locked by passwd
+    if passwd -S "$username" 2>/dev/null | grep -q " L "; then 
+        echo -e "${C_YELLOW}LOCKED${C_RESET}"
+        return
+    fi
+    
+    # Check if expired
     local expiry_ts=$(date -d "$expiry_date" +%s 2>/dev/null || echo 0)
     local current_ts=$(date +%s)
-    if [[ $expiry_ts -lt $current_ts ]]; then echo -e "${C_RED}🗓️ Expired${C_RESET}"; return; fi
-    echo -e "${C_GREEN}🟢 Active${C_RESET}"
+    
+    if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
+        echo -e "${C_RED}EXPIRED${C_RESET}"
+        return
+    fi
+    
+    # If all checks pass, user is active
+    echo -e "${C_GREEN}ACTIVE${C_RESET}"
 }
 
 create_user() {
@@ -783,6 +804,8 @@ create_user() {
     echo -e "  - 🔑 Password:          ${C_YELLOW}$password${C_RESET}"
     echo -e "  - 🗓️ Expires on:        ${C_YELLOW}$expire_date${C_RESET}"
     echo -e "  - 📶 Connection Limit:  ${C_YELLOW}$limit${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 delete_user() {
@@ -835,6 +858,8 @@ delete_user() {
 
     sed -i "/^$username:/d" "$DB_FILE"
     echo -e "${C_GREEN}✅ User '$username' has been completely removed.${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 edit_user() {
@@ -906,6 +931,9 @@ edit_user() {
                fi
                ;;
             0)
+               echo -e "\n${C_GREEN}✅ Finished editing${C_RESET}"
+               echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+               safe_read "" dummy
                return
                ;;
             *)
@@ -952,6 +980,8 @@ lock_user() {
     else
         echo -e "\n${C_RED}❌ Failed to lock user '$u'.${C_RESET}"
     fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 unlock_user() {
@@ -988,43 +1018,50 @@ unlock_user() {
     else
         echo -e "\n${C_RED}❌ Failed to unlock user '$u'.${C_RESET}"
     fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
+# ========== LIST USERS (IMPROVED) ==========
 list_users() {
     clear
     show_banner
     if [[ ! -s "$DB_FILE" ]]; then
         echo -e "\n${C_YELLOW}ℹ️ No users are currently being managed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
-    echo -e "${C_BOLD}${C_PURPLE}--- 📋 Managed Users ---${C_RESET}"
-    echo -e "${C_CYAN}======================================================================${C_RESET}"
-    printf "${C_BOLD}${C_WHITE}%-20s | %-12s | %-15s | %-20s${C_RESET}\n" "USERNAME" "EXPIRES" "CONNECTIONS" "STATUS"
-    echo -e "${C_CYAN}----------------------------------------------------------------------${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}                      📋 MANAGED USERS                          ${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    printf "${C_BOLD}${C_WHITE}%-20s | %-12s | %-10s | %-15s${C_RESET}\n" "USERNAME" "EXPIRES" "CONNECTIONS" "STATUS"
+    echo -e "${C_CYAN}───────────────────────────────────────────────────────────────${C_RESET}"
     
     while IFS=: read -r user pass expiry limit; do
-        local online_count
-        online_count=$(pgrep -u "$user" sshd | wc -l)
+        # Skip empty lines
+        [[ -z "$user" ]] && continue
         
-        local status
-        status=$(get_user_status "$user")
-
-        local plain_status
-        plain_status=$(echo -e "$status" | sed 's/\x1b\[[0-9;]*m//g')
+        # Get online count
+        local online_count=0
+        if id "$user" &>/dev/null; then
+            online_count=$(pgrep -u "$user" sshd 2>/dev/null | wc -l)
+        fi
         
+        # Get user status
+        local status=$(get_user_status "$user")
+        
+        # Format connection string
         local connection_string="$online_count / $limit"
-
-        local line_color="$C_WHITE"
-        case $plain_status in
-            *"Active"*) line_color="$C_GREEN" ;;
-            *"Locked"*) line_color="$C_YELLOW" ;;
-            *"Expired"*) line_color="$C_RED" ;;
-            *"Not Found"*) line_color="$C_DIM" ;;
-        esac
-
-        printf "${line_color}%-20s ${C_RESET}| ${C_YELLOW}%-12s ${C_RESET}| ${C_CYAN}%-15s ${C_RESET}| %-20s\n" "$user" "$expiry" "$connection_string" "$status"
-    done < <(sort "$DB_FILE")
-    echo -e "${C_CYAN}======================================================================${C_RESET}\n"
+        
+        printf "%-20s | ${C_YELLOW}%-12s${C_RESET} | ${C_CYAN}%-10s${C_RESET} | %s\n" \
+            "$user" "$expiry" "$connection_string" "$status"
+    done < "$DB_FILE"
+    echo -e "${C_CYAN}───────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "${C_DIM}Note: CONNECTIONS = Current / Max simultaneous connections${C_RESET}"
+    echo ""
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 renew_user() {
@@ -1048,6 +1085,8 @@ renew_user() {
     local limit=$(echo "$line" | cut -d: -f4)
     sed -i "s/^$u:.*/$u:$pass:$new_expire_date:$limit/" "$DB_FILE"
     echo -e "\n${C_GREEN}✅ User '$u' has been renewed. New expiration date is ${C_YELLOW}${new_expire_date}${C_RESET}."
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
 # ========== SYSTEM UTILITIES FUNCTIONS ==========
@@ -1062,6 +1101,8 @@ backup_user_data() {
     
     if [ ! -d "$DB_DIR" ] || [ ! -s "$DB_FILE" ]; then
         echo -e "\n${C_YELLOW}ℹ️ No user data found to back up.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     echo -e "\n${C_BLUE}⚙️ Backing up user database and settings to ${C_YELLOW}$backup_path${C_RESET}..."
@@ -1086,6 +1127,8 @@ restore_user_data() {
     
     if [ ! -f "$backup_path" ]; then
         echo -e "\n${C_RED}❌ ERROR: Backup file not found at '$backup_path'.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     echo -e "\n${C_RED}${C_BOLD}⚠️ WARNING:${C_RESET} This will overwrite all current users and settings."
@@ -1093,6 +1136,8 @@ restore_user_data() {
     safe_read "👉 Are you absolutely sure you want to proceed? (y/n): " confirm
     if [[ "$confirm" != "y" ]]; then
         echo -e "\n${C_YELLOW}❌ Restore cancelled.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     
@@ -1102,6 +1147,8 @@ restore_user_data() {
     if [ $? -ne 0 ]; then
         echo -e "\n${C_RED}❌ ERROR: Failed to extract backup file. Aborting.${C_RESET}"
         rm -rf "$temp_dir"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     
@@ -1109,6 +1156,8 @@ restore_user_data() {
     if [ ! -f "$restored_db_file" ]; then
         echo -e "\n${C_RED}❌ ERROR: users.db not found in the backup. Cannot restore user accounts.${C_RESET}"
         rm -rf "$temp_dir"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     
@@ -1153,6 +1202,8 @@ cleanup_expired() {
 
     if [[ ! -s "$DB_FILE" ]]; then
         echo -e "\n${C_GREEN}✅ User database is empty. No expired users found.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     
@@ -1166,6 +1217,8 @@ cleanup_expired() {
 
     if [ ${#expired_users[@]} -eq 0 ]; then
         echo -e "\n${C_GREEN}✅ No expired users found.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
 
@@ -1510,27 +1563,29 @@ uninstall_xui_panel() {
     safe_read "" dummy
 }
 
+# ========== SHOW DNSTT DETAILS (PUBLIC KEY IMEWEKWA!) ==========
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
         source "$DNSTT_CONFIG_FILE"
-        echo -e "\n${C_GREEN}=====================================================${C_RESET}"
-        echo -e "${C_GREEN}            📡 DNSTT Connection Details             ${C_RESET}"
-        echo -e "${C_GREEN}=====================================================${C_RESET}"
-        echo -e "\n${C_WHITE}Your connection details:${C_RESET}"
-        echo -e "  - ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-        echo -e "  - ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_GREEN}           📡 DNSTT CONNECTION DETAILS${C_RESET}"
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
         if [[ -n "$FORWARD_DESC" ]]; then
-            echo -e "  - ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+            echo -e "  ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
         fi
         if [[ -n "$MTU_VALUE" ]]; then
-            echo -e "  - ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
+            echo -e "  ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
         fi
-        echo -e "\n${C_DIM}Use these details in your client configuration.${C_RESET}"
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_DIM}Use these details in your DNS client configuration.${C_RESET}"
     else
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT configuration file not found. Details are unavailable.${C_RESET}"
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT is not installed yet.${C_RESET}"
     fi
 }
 
+# ========== INSTALL DNSTT (IMPROVED) ==========
 install_dnstt() {
     clear
     show_banner
@@ -1728,9 +1783,11 @@ EOF
     echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
     echo -e "  Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-    echo -e "  MTU: ${C_YELLOW}$MTU${C_RESET} (ULTIMATE BOOSTER ACTIVE)"
-    echo -e "  Public Key: ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+    echo -e "  Public Key:    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+    echo -e "  MTU:           ${C_YELLOW}$MTU${C_RESET} (ULTIMATE BOOSTER ACTIVE)"
+    echo -e "  Forwarding:    ${C_YELLOW}$forward_desc${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "\n${C_YELLOW}IMPORTANT: Save this Public Key! You'll need it for client configuration.${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
 }
@@ -1803,9 +1860,9 @@ dt_proxy_menu() {
         local choice
         safe_read "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
         case $choice in
-            1) install_dt_proxy_full; press_enter ;;
-            2) launch_dt_proxy_menu; press_enter ;;
-            3) uninstall_dt_proxy_full; press_enter ;;
+            1) install_dt_proxy_full ;;
+            2) launch_dt_proxy_menu ;;
+            3) uninstall_dt_proxy_full ;;
             0) return ;;
             *) echo -e "\n${C_RED}❌ Invalid option.${C_RESET}" && sleep 2 ;;
         esac
@@ -2082,7 +2139,7 @@ main_menu() {
             3) edit_user ;;
             4) lock_user ;;
             5) unlock_user ;;
-            6) list_users; press_enter ;;
+            6) list_users ;;
             7) renew_user ;;
             8) protocol_menu ;;
             9) backup_user_data ;;
