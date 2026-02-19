@@ -1204,7 +1204,6 @@ restore_user_data() {
     [ -f "$temp_dir/voltrontech/dns_info.conf" ] && cp "$temp_dir/voltrontech/dns_info.conf" "$DB_DIR/"
     [ -f "$temp_dir/voltrontech/dnstt_info.conf" ] && cp "$temp_dir/voltrontech/dnstt_info.conf" "$DB_DIR/"
     [ -f "$temp_dir/voltrontech/voltronproxy_config.conf" ] && cp "$temp_dir/voltrontech/voltronproxy_config.conf" "$DB_DIR/"
-    [ -f "$temp_dir/voltrontech/cloudflare.conf" ] && cp "$temp_dir/voltrontech/cloudflare.conf" "$DB_DIR/"
     
     echo -e "${C_BLUE}⚙️ Re-synchronizing system accounts with the restored database...${C_RESET}"
     
@@ -1275,9 +1274,9 @@ cleanup_expired() {
     safe_read "" dummy
 }
 
-# ========== DNS MANAGEMENT FUNCTIONS ==========
-generate_dns_record() {
-    echo -e "\n${C_BLUE}⚙️ Generating random subdomains for Cloudflare...${C_RESET}"
+# ========== CLOUDFLARE DNS GENERATION ==========
+generate_cloudflare_dns() {
+    echo -e "\n${C_BLUE}⚙️ Generating DNS records in Cloudflare...${C_RESET}"
     
     # Load Cloudflare credentials
     source "$DB_DIR/cloudflare.conf" 2>/dev/null || {
@@ -1292,79 +1291,342 @@ generate_dns_record() {
         return 1
     fi
 
-    local RANDOM_STR1
-    RANDOM_STR1=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-    local RANDOM_STR2
-    RANDOM_STR2=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+    local RANDOM_NS=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+    local RANDOM_TUN=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
     
-    local NS_SUBDOMAIN="ns-$RANDOM_STR1"
-    local TUNNEL_SUBDOMAIN="tun-$RANDOM_STR2"
+    local NS_SUBDOMAIN="ns-$RANDOM_NS"
+    local TUNNEL_SUBDOMAIN="tun-$RANDOM_TUN"
     local NS_DOMAIN="$NS_SUBDOMAIN.$DOMAIN"
     local TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DOMAIN"
     
     echo -e "${C_BLUE}📝 Creating A record for $NS_DOMAIN...${C_RESET}"
     local ns_record_id
     ns_record_id=$(create_cloudflare_dns_record "A" "$NS_SUBDOMAIN" "$SERVER_IPV4")
-    if [ $? -ne 0 ] || [ -z "$ns_record_id" ]; then
-        echo -e "${C_RED}❌ Failed to create A record for nameserver${C_RESET}"
+    
+    if [ -z "$ns_record_id" ]; then
+        echo -e "${C_RED}❌ Failed to create A record. Using custom mode fallback.${C_RESET}"
         return 1
     fi
     
     echo -e "${C_BLUE}📝 Creating NS record for $TUNNEL_DOMAIN pointing to $NS_DOMAIN...${C_RESET}"
-    local ns_record_content="$NS_DOMAIN"
     local tunnel_record_id
-    tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$ns_record_content")
-    if [ $? -ne 0 ] || [ -z "$tunnel_record_id" ]; then
-        echo -e "${C_RED}❌ Failed to create NS record for tunnel${C_RESET}"
+    tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$NS_DOMAIN")
+    
+    if [ -z "$tunnel_record_id" ]; then
+        echo -e "${C_RED}❌ Failed to create NS record. Deleting A record...${C_RESET}"
         delete_cloudflare_dns_record "$ns_record_id"
         return 1
     fi
     
-    cat > "$DNS_INFO_FILE" <<-EOF
-NS_SUBDOMAIN="$NS_SUBDOMAIN"
-TUNNEL_SUBDOMAIN="$TUNNEL_SUBDOMAIN"
+    # Save DNS info
+    cat > "$DNS_INFO_FILE" <<EOF
 NS_DOMAIN="$NS_DOMAIN"
 TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
 NS_RECORD_ID="$ns_record_id"
 TUNNEL_RECORD_ID="$tunnel_record_id"
 EOF
     
-    echo -e "\n${C_GREEN}✅ Successfully created DNS records in Cloudflare!${C_RESET}"
-    echo -e "  - Nameserver: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
-    echo -e "  - Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    echo -e "\n${C_GREEN}✅ DNS records created successfully in Cloudflare!${C_RESET}"
+    echo -e "  Nameserver: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+    echo -e "  Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    
+    # Return the domains
+    NS_DOMAIN_RET="$NS_DOMAIN"
+    TUNNEL_DOMAIN_RET="$TUNNEL_DOMAIN"
+    return 0
 }
 
-delete_dns_record() {
-    if [ ! -f "$DNS_INFO_FILE" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ No domain to delete.${C_RESET}"
+# ========== SHOW DNSTT DETAILS ==========
+show_dnstt_details() {
+    if [ -f "$DNSTT_CONFIG_FILE" ]; then
+        source "$DNSTT_CONFIG_FILE"
+        echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_GREEN}           📡 DNSTT CONNECTION DETAILS${C_RESET}"
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        if [[ -n "$FORWARD_DESC" ]]; then
+            echo -e "  ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+        fi
+        if [[ -n "$MTU_VALUE" ]]; then
+            echo -e "  ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
+        fi
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ IMPORTANT: Save this Public Key - you'll need it for clients!${C_RESET}"
+    else
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT is not installed yet.${C_RESET}"
+    fi
+}
+
+# ========== INSTALL DNSTT (FIXED VERSION - BOTH PUBLIC KEY & DOMAIN WORK) ==========
+install_dnstt() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}           📡 DNSTT (DNS TUNNEL) INSTALLATION${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    
+    # Check if already installed
+    if [ -f "$DNSTT_SERVICE_FILE" ] && systemctl is-active --quiet dnstt.service; then
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed and running.${C_RESET}"
+        show_dnstt_details
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
         return
     fi
     
-    # Load Cloudflare credentials
-    source "$DB_DIR/cloudflare.conf" 2>/dev/null || {
-        echo -e "${C_RED}❌ Cloudflare configuration not found.${C_RESET}"
-        return 1
-    }
-    
-    echo -e "\n${C_BLUE}🗑️ Deleting DNS records from Cloudflare...${C_RESET}"
-    source "$DNS_INFO_FILE"
-    
-    if [[ -n "$TUNNEL_RECORD_ID" ]]; then
-        delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+    # Step 1: Check port 53
+    echo -e "\n${C_BLUE}[1/6] Checking port 53 availability...${C_RESET}"
+    if ss -lunp | grep -q ':53\s'; then
+        echo -e "${C_YELLOW}⚠️ Port 53 is in use. Stopping systemd-resolved...${C_RESET}"
+        systemctl stop systemd-resolved 2>/dev/null
+        systemctl disable systemd-resolved 2>/dev/null
+        rm -f /etc/resolv.conf
+        echo "nameserver 8.8.8.8" > /etc/resolv.conf
+        echo -e "${C_GREEN}✅ Port 53 is now free${C_RESET}"
+    else
+        echo -e "${C_GREEN}✅ Port 53 is free${C_RESET}"
     fi
     
-    if [[ -n "$NS_RECORD_ID" ]]; then
-        delete_cloudflare_dns_record "$NS_RECORD_ID"
+    # Step 2: Choose forwarding target
+    echo -e "\n${C_BLUE}[2/6] Choose forwarding target...${C_RESET}"
+    echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
+    echo -e "  ${C_GREEN}2)${C_RESET} V2Ray (port 8787)"
+    
+    local fwd_choice
+    safe_read "👉 Enter your choice [1]: " fwd_choice
+    fwd_choice=${fwd_choice:-1}
+    
+    local forward_port=""
+    local forward_desc=""
+    if [[ "$fwd_choice" == "1" ]]; then
+        forward_port="22"
+        forward_desc="SSH"
+        echo -e "${C_GREEN}✅ Forwarding to SSH on port 22${C_RESET}"
+    else
+        forward_port="8787"
+        forward_desc="V2Ray"
+        echo -e "${C_GREEN}✅ Forwarding to V2Ray on port 8787${C_RESET}"
     fi
+    local FORWARD_TARGET="127.0.0.1:$forward_port"
+    
+    # Step 3: DNS Method
+    echo -e "\n${C_BLUE}[3/6] DNS Record Creation Method...${C_RESET}"
+    echo -e "  ${C_GREEN}1)${C_RESET} Auto-generate with Cloudflare"
+    echo -e "  ${C_GREEN}2)${C_RESET} Use custom domains (manual)"
+    
+    local dns_choice
+    safe_read "👉 Enter your choice [1]: " dns_choice
+    dns_choice=${dns_choice:-1}
+    
+    local NS_DOMAIN=""
+    local TUNNEL_DOMAIN=""
+    
+    if [[ "$dns_choice" == "1" ]]; then
+        echo -e "\n${C_BLUE}⚙️ Auto-generating DNS records with Cloudflare...${C_RESET}"
+        if generate_cloudflare_dns; then
+            NS_DOMAIN="$NS_DOMAIN_RET"
+            TUNNEL_DOMAIN="$TUNNEL_DOMAIN_RET"
+            echo -e "${C_GREEN}✅ DNS records created successfully${C_RESET}"
+        else
+            echo -e "\n${C_YELLOW}⚠️ Cloudflare auto-generation failed. Switching to manual mode.${C_RESET}"
+            dns_choice="2"
+        fi
+    fi
+    
+    if [[ "$dns_choice" == "2" ]] || [[ -z "$NS_DOMAIN" ]]; then
+        echo -e "\n${C_BLUE}Enter your custom domains:${C_RESET}"
+        safe_read "👉 Nameserver domain (e.g., ns.yourdomain.com): " NS_DOMAIN
+        if [[ -z "$NS_DOMAIN" ]]; then
+            echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+        safe_read "👉 Tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
+        if [[ -z "$TUNNEL_DOMAIN" ]]; then
+            echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+    fi
+    
+    # Step 4: MTU Selection
+    echo -e "\n${C_BLUE}[4/6] MTU Selection...${C_RESET}"
+    mtu_selection_during_install
+    
+    # Step 5: Download and install DNSTT binary
+    echo -e "\n${C_BLUE}[5/6] Downloading DNSTT server...${C_RESET}"
+    local arch=$(uname -m)
+    local download_success=0
+    
+    # Try primary source
+    if [[ "$arch" == "x86_64" ]]; then
+        echo -e "${C_YELLOW}Downloading from GitHub (amd64)...${C_RESET}"
+        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz"
+        
+        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
+            cd /tmp
+            tar -xzf dnstt.tar.gz
+            if [ -f /tmp/server_linux_amd64 ]; then
+                cp /tmp/server_linux_amd64 "$DNSTT_BINARY"
+                download_success=1
+            fi
+            rm -f /tmp/dnstt.tar.gz
+        fi
+    elif [[ "$arch" == "aarch64" ]]; then
+        echo -e "${C_YELLOW}Downloading from GitHub (arm64)...${C_RESET}"
+        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-arm64-20240101.tar.gz"
+        
+        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
+            cd /tmp
+            tar -xzf dnstt.tar.gz
+            if [ -f /tmp/server_linux_arm64 ]; then
+                cp /tmp/server_linux_arm64 "$DNSTT_BINARY"
+                download_success=1
+            fi
+            rm -f /tmp/dnstt.tar.gz
+        fi
+    fi
+    
+    # Fallback to alternative source if needed
+    if [ $download_success -eq 0 ]; then
+        echo -e "${C_YELLOW}Primary source failed. Trying alternative source...${C_RESET}"
+        if [[ "$arch" == "x86_64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-amd64"
+            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
+                download_success=1
+            fi
+        elif [[ "$arch" == "aarch64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-arm64"
+            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
+                download_success=1
+            fi
+        fi
+    fi
+    
+    if [ $download_success -eq 0 ]; then
+        echo -e "\n${C_RED}❌ Failed to download DNSTT binary. Please check your internet connection.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    chmod +x "$DNSTT_BINARY"
+    echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
+    
+    # Step 6: Generate keys (THIS IS THE CRITICAL PART - SIMPLE LIKE FALCON)
+    echo -e "\n${C_BLUE}[6/6] Generating cryptographic keys...${C_RESET}"
+    mkdir -p "$DNSTT_KEYS_DIR"
+    
+    # Simple key generation - exactly like Falcon
+    "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
+    
+    # Check if keys were created
+    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
+        echo -e "\n${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    # Read the public key
+    local PUBLIC_KEY
+    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
+    echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
+    
+    # Create systemd service
+    echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
+    cat > "$DNSTT_SERVICE_FILE" <<EOF
+[Unit]
+Description=DNSTT Tunnel Server
+After=network.target
 
-    echo -e "\n${C_GREEN}✅ Deleted DNS records${C_RESET}"
-    rm -f "$DNS_INFO_FILE"
+[Service]
+Type=simple
+User=root
+ExecStart=$DNSTT_BINARY -udp :53 -mtu $MTU -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Save configuration
+    cat > "$DNSTT_CONFIG_FILE" <<EOF
+NS_DOMAIN="$NS_DOMAIN"
+TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
+PUBLIC_KEY="$PUBLIC_KEY"
+FORWARD_DESC="$forward_desc (port $forward_port)"
+MTU_VALUE="$MTU"
+EOF
+
+    # Start service
+    systemctl daemon-reload
+    systemctl enable dnstt.service
+    
+    if systemctl start dnstt.service; then
+        echo -e "${C_GREEN}✅ DNSTT service started successfully${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
+        echo -e "${C_YELLOW}Check logs with: journalctl -u dnstt.service${C_RESET}"
+    fi
+    
+    # Show success message with PUBLIC KEY
+    echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
+    echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+    echo -e "  ${C_CYAN}MTU:${C_RESET}           ${C_YELLOW}$MTU${C_RESET}"
+    echo -e "  ${C_CYAN}Forwarding:${C_RESET}    ${C_YELLOW}$forward_desc (port $forward_port)${C_RESET}"
+    echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ IMPORTANT: Copy this Public Key - you'll need it for clients!${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
 }
 
+uninstall_dnstt() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling DNSTT...${C_RESET}"
+    
+    # Stop and disable service
+    systemctl stop dnstt.service 2>/dev/null
+    systemctl disable dnstt.service 2>/dev/null
+    
+    # Remove service file
+    rm -f "$DNSTT_SERVICE_FILE"
+    
+    # Remove binary and keys
+    rm -f "$DNSTT_BINARY"
+    rm -rf "$DNSTT_KEYS_DIR"
+    rm -f "$DNSTT_CONFIG_FILE"
+    
+    # Remove DNS records if auto-generated
+    if [ -f "$DNS_INFO_FILE" ] && [ -f "$DB_DIR/cloudflare.conf" ]; then
+        source "$DB_DIR/cloudflare.conf"
+        source "$DNS_INFO_FILE"
+        if [ -n "$TUNNEL_RECORD_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo -e "${C_BLUE}Removing DNS records from Cloudflare...${C_RESET}"
+            delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+            delete_cloudflare_dns_record "$NS_RECORD_ID"
+            rm -f "$DNS_INFO_FILE"
+        fi
+    fi
+    
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ DNSTT uninstalled successfully${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+# ========== DNS MANAGEMENT MENU ==========
 dns_menu() {
     clear
     show_banner
     echo -e "${C_BOLD}${C_PURPLE}--- 🌐 DNS Domain Management (Cloudflare) ---${C_RESET}"
+    
     if [ -f "$DNS_INFO_FILE" ]; then
         source "$DNS_INFO_FILE"
         echo -e "\nℹ️ DNS records already exist for this server:"
@@ -1374,7 +1636,14 @@ dns_menu() {
         local choice
         safe_read "👉 Do you want to DELETE these records? (y/n): " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            delete_dns_record
+            # Load Cloudflare credentials
+            source "$DB_DIR/cloudflare.conf" 2>/dev/null
+            if [ -n "$TUNNEL_RECORD_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+                delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+                delete_cloudflare_dns_record "$NS_RECORD_ID"
+            fi
+            rm -f "$DNS_INFO_FILE"
+            echo -e "${C_GREEN}✅ DNS records deleted${C_RESET}"
         else
             echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
         fi
@@ -1384,7 +1653,7 @@ dns_menu() {
         local choice
         safe_read "👉 Do you want to generate new DNS records in Cloudflare? (y/n): " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            generate_dns_record
+            generate_cloudflare_dns
         else
             echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
         fi
@@ -1512,7 +1781,7 @@ ssh_banner_menu() {
     done
 }
 
-# ========== PROTOCOL MENU FUNCTIONS ==========
+# ========== PROTOCOL FUNCTIONS ==========
 install_badvpn() {
     clear
     show_banner
@@ -2122,273 +2391,6 @@ check_dt_proxy_status() {
     else
         echo ""
     fi
-}
-
-# ========== SHOW DNSTT DETAILS (PUBLIC KEY INAONEKANA) ==========
-show_dnstt_details() {
-    if [ -f "$DNSTT_CONFIG_FILE" ]; then
-        source "$DNSTT_CONFIG_FILE"
-        echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "${C_GREEN}           📡 DNSTT CONNECTION DETAILS${C_RESET}"
-        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-        echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
-        if [[ -n "$FORWARD_DESC" ]]; then
-            echo -e "  ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
-        fi
-        if [[ -n "$MTU_VALUE" ]]; then
-            echo -e "  ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
-        fi
-        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "${C_YELLOW}⚠️ IMPORTANT: Save this Public Key - you'll need it for clients!${C_RESET}"
-    else
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT is not installed yet.${C_RESET}"
-    fi
-}
-
-# ========== INSTALL DNSTT (KAMA FALCON - PUBLIC KEY ITAFANYA KAZI!) ==========
-install_dnstt() {
-    clear
-    show_banner
-    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "${C_BOLD}${C_PURPLE}           📡 DNSTT (DNS TUNNEL) INSTALLATION${C_RESET}"
-    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-    
-    # Check if already installed
-    if [ -f "$DNSTT_SERVICE_FILE" ] && systemctl is-active --quiet dnstt.service; then
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed and running.${C_RESET}"
-        show_dnstt_details
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-        return
-    fi
-    
-    # Step 1: Check port 53
-    echo -e "\n${C_BLUE}[1/5] Checking port 53 availability...${C_RESET}"
-    if ss -lunp | grep -q ':53\s'; then
-        echo -e "${C_YELLOW}⚠️ Port 53 is in use. Stopping systemd-resolved...${C_RESET}"
-        systemctl stop systemd-resolved 2>/dev/null
-        systemctl disable systemd-resolved 2>/dev/null
-        rm -f /etc/resolv.conf
-        echo "nameserver 8.8.8.8" > /etc/resolv.conf
-        echo -e "${C_GREEN}✅ Port 53 is now free${C_RESET}"
-    else
-        echo -e "${C_GREEN}✅ Port 53 is free${C_RESET}"
-    fi
-    
-    # Step 2: Choose forwarding target
-    echo -e "\n${C_BLUE}[2/5] Choose forwarding target...${C_RESET}"
-    echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
-    echo -e "  ${C_GREEN}2)${C_RESET} V2Ray (port 8787)"
-    
-    local fwd_choice
-    safe_read "👉 Enter your choice [1]: " fwd_choice
-    fwd_choice=${fwd_choice:-1}
-    
-    local forward_port=""
-    local forward_desc=""
-    if [[ "$fwd_choice" == "1" ]]; then
-        forward_port="22"
-        forward_desc="SSH"
-        echo -e "${C_GREEN}✅ Forwarding to SSH on port 22${C_RESET}"
-    else
-        forward_port="8787"
-        forward_desc="V2Ray"
-        echo -e "${C_GREEN}✅ Forwarding to V2Ray on port 8787${C_RESET}"
-    fi
-    local FORWARD_TARGET="127.0.0.1:$forward_port"
-    
-    # Step 3: DNS Method
-    echo -e "\n${C_BLUE}[3/5] DNS Record Creation Method...${C_RESET}"
-    echo -e "  ${C_GREEN}1)${C_RESET} Auto-generate with Cloudflare"
-    echo -e "  ${C_GREEN}2)${C_RESET} Use custom domains"
-    
-    local dns_choice
-    safe_read "👉 Enter your choice [2]: " dns_choice
-    dns_choice=${dns_choice:-2}
-    
-    local NS_DOMAIN=""
-    local TUNNEL_DOMAIN=""
-    
-    if [[ "$dns_choice" == "2" ]]; then
-        echo -e "\n${C_BLUE}Enter your custom domains:${C_RESET}"
-        safe_read "👉 Nameserver domain (e.g., ns.yourdomain.com): " NS_DOMAIN
-        if [[ -z "$NS_DOMAIN" ]]; then
-            echo -e "\n${C_RED}❌ Nameserver domain cannot be empty. Aborting.${C_RESET}"
-            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-            safe_read "" dummy
-            return
-        fi
-        safe_read "👉 Tunnel domain (e.g., tun.yourdomain.com): " TUNNEL_DOMAIN
-        if [[ -z "$TUNNEL_DOMAIN" ]]; then
-            echo -e "\n${C_RED}❌ Tunnel domain cannot be empty. Aborting.${C_RESET}"
-            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-            safe_read "" dummy
-            return
-        fi
-    else
-        echo -e "\n${C_BLUE}⚙️ Auto-generating with Cloudflare...${C_RESET}"
-        # Simple auto-generation without complex Cloudflare API
-        local rand=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-        NS_DOMAIN="ns-$rand.$DOMAIN"
-        TUNNEL_DOMAIN="tun-$rand.$DOMAIN"
-        echo -e "${C_GREEN}✅ Generated: $NS_DOMAIN and $TUNNEL_DOMAIN${C_RESET}"
-        echo -e "${C_YELLOW}⚠️ Please add these records manually in your Cloudflare DNS:${C_RESET}"
-        echo -e "  A record: $NS_DOMAIN -> $IP"
-        echo -e "  NS record: $TUNNEL_DOMAIN -> $NS_DOMAIN"
-    fi
-    
-    # Step 4: MTU Selection
-    echo -e "\n${C_BLUE}[4/5] MTU Selection...${C_RESET}"
-    mtu_selection_during_install
-    
-    # Step 5: Download and install DNSTT
-    echo -e "\n${C_BLUE}[5/5] Downloading DNSTT server...${C_RESET}"
-    local arch=$(uname -m)
-    local download_success=0
-    
-    # Try primary source
-    if [[ "$arch" == "x86_64" ]]; then
-        echo -e "${C_YELLOW}Downloading from GitHub...${C_RESET}"
-        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz"
-        
-        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
-            cd /tmp
-            tar -xzf dnstt.tar.gz
-            if [ -f /tmp/server_linux_amd64 ]; then
-                cp /tmp/server_linux_amd64 "$DNSTT_BINARY"
-                download_success=1
-            fi
-            rm -f /tmp/dnstt.tar.gz
-        fi
-    elif [[ "$arch" == "aarch64" ]]; then
-        echo -e "${C_YELLOW}Downloading from GitHub...${C_RESET}"
-        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-arm64-20240101.tar.gz"
-        
-        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
-            cd /tmp
-            tar -xzf dnstt.tar.gz
-            if [ -f /tmp/server_linux_arm64 ]; then
-                cp /tmp/server_linux_arm64 "$DNSTT_BINARY"
-                download_success=1
-            fi
-            rm -f /tmp/dnstt.tar.gz
-        fi
-    fi
-    
-    # Fallback to alternative source
-    if [ $download_success -eq 0 ]; then
-        echo -e "${C_YELLOW}Trying alternative source...${C_RESET}"
-        if [[ "$arch" == "x86_64" ]]; then
-            curl -L -o "$DNSTT_BINARY" "https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/main/bin/dnstt-server-amd64"
-            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
-                download_success=1
-            fi
-        elif [[ "$arch" == "aarch64" ]]; then
-            curl -L -o "$DNSTT_BINARY" "https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/main/bin/dnstt-server-arm64"
-            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
-                download_success=1
-            fi
-        fi
-    fi
-    
-    if [ $download_success -eq 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download DNSTT binary.${C_RESET}"
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-        return
-    fi
-    
-    chmod +x "$DNSTT_BINARY"
-    echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
-    
-    # Generate keys (KAMA FALCON - RAHISI NA SAWA!)
-    echo -e "\n${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
-    mkdir -p "$DNSTT_KEYS_DIR"
-    "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
-    
-    if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]] || [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
-        echo -e "\n${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-        return
-    fi
-    
-    local PUBLIC_KEY
-    PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
-    echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
-    
-    # Create systemd service
-    echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
-    cat > "$DNSTT_SERVICE_FILE" <<EOF
-[Unit]
-Description=DNSTT Tunnel Server
-After=network.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=$DNSTT_BINARY -udp :53 -mtu $MTU -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # Save configuration
-    cat > "$DNSTT_CONFIG_FILE" <<EOF
-NS_DOMAIN="$NS_DOMAIN"
-TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
-PUBLIC_KEY="$PUBLIC_KEY"
-FORWARD_DESC="$forward_desc (port $forward_port)"
-MTU_VALUE="$MTU"
-EOF
-
-    # Start service
-    systemctl daemon-reload
-    systemctl enable dnstt.service
-    
-    if systemctl start dnstt.service; then
-        echo -e "${C_GREEN}✅ DNSTT service started successfully${C_RESET}"
-    else
-        echo -e "\n${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
-        echo -e "${C_YELLOW}Check logs with: journalctl -u dnstt.service${C_RESET}"
-    fi
-    
-    # Show success message with PUBLIC KEY
-    echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
-    echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-    echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
-    echo -e "  ${C_CYAN}MTU:${C_RESET}           ${C_YELLOW}$MTU${C_RESET}"
-    echo -e "  ${C_CYAN}Forwarding:${C_RESET}    ${C_YELLOW}$forward_desc (port $forward_port)${C_RESET}"
-    echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "${C_YELLOW}⚠️ IMPORTANT: Copy this Public Key - you'll need it for clients!${C_RESET}"
-    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-    safe_read "" dummy
-}
-
-uninstall_dnstt() {
-    echo -e "\n${C_BLUE}🗑️ Uninstalling DNSTT...${C_RESET}"
-    
-    # Stop and disable service
-    systemctl stop dnstt.service 2>/dev/null
-    systemctl disable dnstt.service 2>/dev/null
-    
-    # Remove service file
-    rm -f "$DNSTT_SERVICE_FILE"
-    
-    # Remove binary and keys
-    rm -f "$DNSTT_BINARY"
-    rm -rf "$DNSTT_KEYS_DIR"
-    rm -f "$DNSTT_CONFIG_FILE"
-    
-    systemctl daemon-reload
-    echo -e "${C_GREEN}✅ DNSTT uninstalled successfully${C_RESET}"
-    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-    safe_read "" dummy
 }
 
 # ========== PROTOCOL MENU ==========
