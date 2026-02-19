@@ -1512,7 +1512,7 @@ ssh_banner_menu() {
     done
 }
 
-# ========== PROTOCOL INSTALLATION FUNCTIONS ==========
+# ========== PROTOCOL MENU FUNCTIONS (ZOTE ZIMERUDISHWA) ==========
 install_badvpn() {
     clear
     show_banner
@@ -2032,6 +2032,89 @@ uninstall_xui_panel() {
     safe_read "" dummy
 }
 
+install_dt_proxy_full() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Installing DT Proxy ---${C_RESET}"
+    
+    if [ -f "/usr/local/bin/main" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ DT Proxy is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading DT Proxy installer...${C_RESET}"
+    curl -sL https://raw.githubusercontent.com/voltrontech/ProxyMods/main/install.sh | bash
+    
+    if [ $? -eq 0 ]; then
+        echo -e "\n${C_GREEN}✅ DT Proxy installed successfully${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Installation failed${C_RESET}"
+    fi
+    
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+launch_dt_proxy_menu() {
+    if [ -f "/usr/local/bin/main" ]; then
+        clear
+        /usr/local/bin/main
+    else
+        echo -e "\n${C_RED}❌ DT Proxy is not installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+    fi
+}
+
+uninstall_dt_proxy_full() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling DT Proxy...${C_RESET}"
+    
+    systemctl stop proxy-*.service 2>/dev/null
+    systemctl disable proxy-*.service 2>/dev/null
+    rm -f /etc/systemd/system/proxy-*.service
+    
+    rm -f /usr/local/bin/proxy
+    rm -f /usr/local/bin/main
+    rm -f /usr/local/bin/install_mod
+    
+    systemctl daemon-reload
+    
+    echo -e "${C_GREEN}✅ DT Proxy uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+dt_proxy_menu() {
+    while true; do
+        clear
+        show_banner
+        local status=""
+        [ -f "/usr/local/bin/main" ] && status="${C_BLUE}(installed)${C_RESET}"
+        
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}              🚀 DT PROXY MANAGEMENT ${status}${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} Install DT Proxy"
+        echo -e "  ${C_GREEN}2)${C_RESET} Launch DT Proxy Menu"
+        echo -e "  ${C_RED}3)${C_RESET} Uninstall DT Proxy"
+        echo -e "  ${C_RED}0)${C_RESET} Return"
+        echo ""
+        
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select option: "${C_RESET})" choice
+        
+        case $choice in
+            1) install_dt_proxy_full ;;
+            2) launch_dt_proxy_menu ;;
+            3) uninstall_dt_proxy_full ;;
+            0) return ;;
+            *) echo -e "\n${C_RED}❌ Invalid option${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
 # ========== SHOW DNSTT DETAILS (PUBLIC KEY INAONEKANA) ==========
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
@@ -2054,7 +2137,7 @@ show_dnstt_details() {
     fi
 }
 
-# ========== INSTALL DNSTT (FINAL VERSION - INAFANYA KAZI 100%) ==========
+# ========== INSTALL DNSTT (FINAL VERSION - KAMA ILIVYOKUWA AWALI) ==========
 install_dnstt() {
     clear
     show_banner
@@ -2063,24 +2146,16 @@ install_dnstt() {
     echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
     
     # Check if already installed
-    if [ -f "$DNSTT_SERVICE_FILE" ] && systemctl is-active --quiet dnstt.service; then
-        echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed and running.${C_RESET}"
+    if [ -f "$DNSTT_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed.${C_RESET}"
         show_dnstt_details
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
         safe_read "" dummy
         return
     fi
     
-    # Load Cloudflare credentials
-    if [ -f "$DB_DIR/cloudflare.conf" ]; then
-        source "$DB_DIR/cloudflare.conf"
-        echo -e "\n${C_GREEN}✅ Cloudflare configuration loaded${C_RESET}"
-    else
-        echo -e "\n${C_YELLOW}⚠️ Cloudflare configuration not found. Using custom mode.${C_RESET}"
-    fi
-    
     # Step 1: Check port 53
-    echo -e "\n${C_BLUE}[1/6] Checking port 53 availability...${C_RESET}"
+    echo -e "\n${C_BLUE}[1/5] Checking port 53 availability...${C_RESET}"
     if ss -lunp | grep -q ':53\s'; then
         echo -e "${C_YELLOW}⚠️ Port 53 is in use. Stopping systemd-resolved...${C_RESET}"
         systemctl stop systemd-resolved 2>/dev/null
@@ -2093,7 +2168,7 @@ install_dnstt() {
     fi
     
     # Step 2: Choose forwarding target
-    echo -e "\n${C_BLUE}[2/6] Choose forwarding target...${C_RESET}"
+    echo -e "\n${C_BLUE}[2/5] Choose forwarding target...${C_RESET}"
     echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
     echo -e "  ${C_GREEN}2)${C_RESET} V2Ray (port 8787)"
     
@@ -2115,7 +2190,7 @@ install_dnstt() {
     local FORWARD_TARGET="127.0.0.1:$forward_port"
     
     # Step 3: DNS Method
-    echo -e "\n${C_BLUE}[3/6] DNS Record Creation Method...${C_RESET}"
+    echo -e "\n${C_BLUE}[3/5] DNS Record Creation Method...${C_RESET}"
     echo -e "  ${C_GREEN}1)${C_RESET} Auto-generate with Cloudflare"
     echo -e "  ${C_GREEN}2)${C_RESET} Use custom domains"
     
@@ -2126,47 +2201,7 @@ install_dnstt() {
     local NS_DOMAIN=""
     local TUNNEL_DOMAIN=""
     
-    if [[ "$dns_choice" == "1" ]] && [[ -n "$CLOUDFLARE_API_TOKEN" ]]; then
-        echo -e "\n${C_BLUE}⚙️ Generating random subdomains in Cloudflare...${C_RESET}"
-        
-        local SERVER_IPV4=$(curl -s -4 icanhazip.com)
-        if ! _is_valid_ipv4 "$SERVER_IPV4"; then
-            echo -e "\n${C_RED}❌ Could not detect public IP. Using custom mode.${C_RESET}"
-            dns_choice="2"
-        else
-            local RANDOM_NS=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-            local RANDOM_TUN=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
-            
-            NS_DOMAIN="ns-$RANDOM_NS.$DOMAIN"
-            TUNNEL_DOMAIN="tun-$RANDOM_TUN.$DOMAIN"
-            
-            echo -e "${C_BLUE}📝 Creating A record for $NS_DOMAIN...${C_RESET}"
-            local ns_id=$(create_cloudflare_dns_record "A" "ns-$RANDOM_NS" "$SERVER_IPV4")
-            
-            if [ -n "$ns_id" ]; then
-                echo -e "${C_BLUE}📝 Creating NS record for $TUNNEL_DOMAIN...${C_RESET}"
-                local tun_id=$(create_cloudflare_dns_record "NS" "tun-$RANDOM_TUN" "$NS_DOMAIN")
-                
-                if [ -n "$tun_id" ]; then
-                    cat > "$DNS_INFO_FILE" <<EOF
-NS_DOMAIN="$NS_DOMAIN"
-TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
-NS_RECORD_ID="$ns_id"
-TUNNEL_RECORD_ID="$tun_id"
-EOF
-                    echo -e "${C_GREEN}✅ DNS records created successfully${C_RESET}"
-                else
-                    echo -e "${C_RED}❌ Failed to create NS record. Using custom mode.${C_RESET}"
-                    dns_choice="2"
-                fi
-            else
-                echo -e "${C_RED}❌ Failed to create A record. Using custom mode.${C_RESET}"
-                dns_choice="2"
-            fi
-        fi
-    fi
-    
-    if [[ "$dns_choice" == "2" ]] || [[ -z "$NS_DOMAIN" ]]; then
+    if [[ "$dns_choice" == "2" ]]; then
         echo -e "\n${C_BLUE}Enter your custom domains:${C_RESET}"
         safe_read "👉 Nameserver domain (e.g., ns.yourdomain.com): " NS_DOMAIN
         if [[ -z "$NS_DOMAIN" ]]; then
@@ -2182,20 +2217,30 @@ EOF
             safe_read "" dummy
             return
         fi
+    else
+        echo -e "\n${C_BLUE}⚙️ Auto-generating with Cloudflare...${C_RESET}"
+        # Simple auto-generation without complex Cloudflare API
+        local rand=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+        NS_DOMAIN="ns-$rand.$DOMAIN"
+        TUNNEL_DOMAIN="tun-$rand.$DOMAIN"
+        echo -e "${C_GREEN}✅ Generated: $NS_DOMAIN and $TUNNEL_DOMAIN${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ Please add these records manually in your Cloudflare DNS:${C_RESET}"
+        echo -e "  A record: $NS_DOMAIN -> $IP"
+        echo -e "  NS record: $TUNNEL_DOMAIN -> $NS_DOMAIN"
     fi
     
     # Step 4: MTU Selection
-    echo -e "\n${C_BLUE}[4/6] MTU Selection...${C_RESET}"
+    echo -e "\n${C_BLUE}[4/5] MTU Selection...${C_RESET}"
     mtu_selection_during_install
     
     # Step 5: Download and install DNSTT
-    echo -e "\n${C_BLUE}[5/6] Downloading DNSTT server...${C_RESET}"
+    echo -e "\n${C_BLUE}[5/5] Downloading DNSTT server...${C_RESET}"
     local arch=$(uname -m)
     local download_success=0
     
-    # Try multiple download sources
+    # Try primary source
     if [[ "$arch" == "x86_64" ]]; then
-        echo -e "${C_YELLOW}Trying source 1: GitHub (kcptun)...${C_RESET}"
+        echo -e "${C_YELLOW}Downloading from GitHub...${C_RESET}"
         curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz"
         
         if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
@@ -2204,14 +2249,11 @@ EOF
             if [ -f /tmp/server_linux_amd64 ]; then
                 cp /tmp/server_linux_amd64 "$DNSTT_BINARY"
                 download_success=1
-            elif [ -f /tmp/kcptun-server ]; then
-                cp /tmp/kcptun-server "$DNSTT_BINARY"
-                download_success=1
             fi
             rm -f /tmp/dnstt.tar.gz
         fi
     elif [[ "$arch" == "aarch64" ]]; then
-        echo -e "${C_YELLOW}Trying source 1: GitHub (kcptun)...${C_RESET}"
+        echo -e "${C_YELLOW}Downloading from GitHub...${C_RESET}"
         curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-arm64-20240101.tar.gz"
         
         if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
@@ -2220,18 +2262,14 @@ EOF
             if [ -f /tmp/server_linux_arm64 ]; then
                 cp /tmp/server_linux_arm64 "$DNSTT_BINARY"
                 download_success=1
-            elif [ -f /tmp/kcptun-server ]; then
-                cp /tmp/kcptun-server "$DNSTT_BINARY"
-                download_success=1
             fi
             rm -f /tmp/dnstt.tar.gz
         fi
     fi
     
-    # Fallback to alternative source if needed
+    # Fallback to alternative source
     if [ $download_success -eq 0 ]; then
-        echo -e "${C_YELLOW}Source 1 failed. Trying alternative source...${C_RESET}"
-        
+        echo -e "${C_YELLOW}Trying alternative source...${C_RESET}"
         if [[ "$arch" == "x86_64" ]]; then
             curl -L -o "$DNSTT_BINARY" "https://raw.githubusercontent.com/HumbleTechtz/voltron-tech/main/bin/dnstt-server-amd64"
             if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
@@ -2246,8 +2284,7 @@ EOF
     fi
     
     if [ $download_success -eq 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download DNSTT binary after multiple attempts.${C_RESET}"
-        echo -e "${C_YELLOW}Please check your internet connection and try again.${C_RESET}"
+        echo -e "\n${C_RED}❌ Failed to download DNSTT binary.${C_RESET}"
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
         safe_read "" dummy
         return
@@ -2256,8 +2293,8 @@ EOF
     chmod +x "$DNSTT_BINARY"
     echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
     
-    # Step 6: Generate keys
-    echo -e "\n${C_BLUE}[6/6] Generating cryptographic keys...${C_RESET}"
+    # Generate keys
+    echo -e "\n${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
     
     "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
@@ -2339,107 +2376,10 @@ uninstall_dnstt() {
     rm -rf "$DNSTT_KEYS_DIR"
     rm -f "$DNSTT_CONFIG_FILE"
     
-    # Remove DNS records if auto-generated
-    if [ -f "$DNS_INFO_FILE" ] && [ -f "$DB_DIR/cloudflare.conf" ]; then
-        source "$DB_DIR/cloudflare.conf"
-        source "$DNS_INFO_FILE"
-        
-        if [ -n "$TUNNEL_RECORD_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
-            echo -e "${C_BLUE}Removing DNS records from Cloudflare...${C_RESET}"
-            delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
-            delete_cloudflare_dns_record "$NS_RECORD_ID"
-        fi
-        rm -f "$DNS_INFO_FILE"
-    fi
-    
     systemctl daemon-reload
     echo -e "${C_GREEN}✅ DNSTT uninstalled successfully${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
-}
-
-# ========== DT PROXY MENU ==========
-install_dt_proxy_full() {
-    clear
-    show_banner
-    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 DT Proxy Installation ---${C_RESET}"
-    
-    if [ -f "/usr/local/bin/main" ]; then
-        echo -e "\n${C_YELLOW}ℹ️ DT Proxy is already installed.${C_RESET}"
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-        return
-    fi
-    
-    echo -e "\n${C_GREEN}📥 Downloading DT Proxy installer...${C_RESET}"
-    curl -sL https://raw.githubusercontent.com/voltrontech/ProxyMods/main/install.sh | bash
-    
-    if [ $? -eq 0 ]; then
-        echo -e "\n${C_GREEN}✅ DT Proxy installed successfully${C_RESET}"
-    else
-        echo -e "\n${C_RED}❌ Installation failed${C_RESET}"
-    fi
-    
-    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-    safe_read "" dummy
-}
-
-launch_dt_proxy_menu() {
-    if [ -f "/usr/local/bin/main" ]; then
-        clear
-        /usr/local/bin/main
-    else
-        echo -e "\n${C_RED}❌ DT Proxy is not installed.${C_RESET}"
-        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-        safe_read "" dummy
-    fi
-}
-
-uninstall_dt_proxy_full() {
-    echo -e "\n${C_BLUE}🗑️ Uninstalling DT Proxy...${C_RESET}"
-    
-    systemctl stop proxy-*.service 2>/dev/null
-    systemctl disable proxy-*.service 2>/dev/null
-    rm -f /etc/systemd/system/proxy-*.service
-    
-    rm -f /usr/local/bin/proxy
-    rm -f /usr/local/bin/main
-    rm -f /usr/local/bin/install_mod
-    
-    systemctl daemon-reload
-    
-    echo -e "${C_GREEN}✅ DT Proxy uninstalled${C_RESET}"
-    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
-    safe_read "" dummy
-}
-
-dt_proxy_menu() {
-    while true; do
-        clear
-        show_banner
-        local status=""
-        [ -f "/usr/local/bin/main" ] && status="${C_BLUE}(installed)${C_RESET}"
-        
-        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "${C_BOLD}${C_PURPLE}              🚀 DT PROXY MANAGEMENT ${status}${C_RESET}"
-        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "  ${C_GREEN}1)${C_RESET} Install DT Proxy"
-        echo -e "  ${C_GREEN}2)${C_RESET} Launch DT Proxy Menu"
-        echo -e "  ${C_RED}3)${C_RESET} Uninstall DT Proxy"
-        echo -e "  ${C_RED}0)${C_RESET} Return"
-        echo ""
-        
-        local choice
-        safe_read "$(echo -e ${C_PROMPT}"👉 Select option: "${C_RESET})" choice
-        
-        case $choice in
-            1) install_dt_proxy_full ;;
-            2) launch_dt_proxy_menu ;;
-            3) uninstall_dt_proxy_full ;;
-            0) return ;;
-            *) echo -e "\n${C_RED}❌ Invalid option${C_RESET}"; sleep 2 ;;
-        esac
-    done
 }
 
 # ========== PROTOCOL MENU ==========
@@ -2469,12 +2409,13 @@ protocol_menu() {
         echo -e "  ${C_GREEN}6)${C_RESET} Nginx Proxy $nginx_status"
         echo -e "  ${C_GREEN}7)${C_RESET} ZiVPN $zivpn_status"
         echo -e "  ${C_GREEN}8)${C_RESET} X-UI Panel $xui_status"
+        echo -e "  ${C_GREEN}9)${C_RESET} DT Proxy $(check_dt_proxy_status)"
         echo -e ""
         echo -e "  ${C_RED}0)${C_RESET} Return"
         echo ""
         
         local choice
-        safe_read "$(echo -e ${C_PROMPT}"👉 Select protocol to install/uninstall: "${C_RESET})" choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select protocol to manage: "${C_RESET})" choice
         
         case $choice in
             1)
@@ -2543,10 +2484,22 @@ protocol_menu() {
                 elif [ "$sub" == "2" ]; then uninstall_xui_panel
                 else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
                 ;;
+            9)
+                dt_proxy_menu
+                ;;
             0) return ;;
             *) echo -e "\n${C_RED}❌ Invalid option${C_RESET}"; sleep 2 ;;
         esac
     done
+}
+
+# ========== CHECK DT PROXY STATUS ==========
+check_dt_proxy_status() {
+    if [ -f "/usr/local/bin/main" ]; then
+        echo -e "${C_BLUE}(installed)${C_RESET}"
+    else
+        echo ""
+    fi
 }
 
 # ========== LIMITER SERVICE SETUP ==========
