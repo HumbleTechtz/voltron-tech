@@ -714,7 +714,7 @@ _select_user_interface() {
     done
 }
 
-# ========== GET USER STATUS (IMPROVED) ==========
+# ========== GET USER STATUS ==========
 get_user_status() {
     local username="$1"
     
@@ -1022,7 +1022,7 @@ unlock_user() {
     safe_read "" dummy
 }
 
-# ========== LIST USERS (IMPROVED) ==========
+# ========== LIST USERS ==========
 list_users() {
     clear
     show_banner
@@ -1563,7 +1563,7 @@ uninstall_xui_panel() {
     safe_read "" dummy
 }
 
-# ========== SHOW DNSTT DETAILS (PUBLIC KEY IMEWEKWA!) ==========
+# ========== SHOW DNSTT DETAILS (PUBLIC KEY INAONEKANA SASA!) ==========
 show_dnstt_details() {
     if [ -f "$DNSTT_CONFIG_FILE" ]; then
         source "$DNSTT_CONFIG_FILE"
@@ -1579,13 +1579,13 @@ show_dnstt_details() {
             echo -e "  ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
         fi
         echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-        echo -e "${C_DIM}Use these details in your DNS client configuration.${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ IMPORTANT: Copy this Public Key - you'll need it for clients!${C_RESET}"
     else
         echo -e "\n${C_YELLOW}ℹ️ DNSTT is not installed yet.${C_RESET}"
     fi
 }
 
-# ========== INSTALL DNSTT (IMPROVED) ==========
+# ========== INSTALL DNSTT (PUBLIC KEY ITAONEKANA) ==========
 install_dnstt() {
     clear
     show_banner
@@ -1744,10 +1744,15 @@ EOF
     chmod +x "$DNSTT_BINARY"
     rm -f dnstt.tar.gz
 
-    # Generate keys
+    # Generate keys (PUBLIC KEY INAUNDWA HAPA!)
     echo -e "${C_BLUE}🔐 Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
     "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
+    
+    if [[ ! -f "$DNSTT_KEYS_DIR/server.pub" ]]; then
+        echo -e "\n${C_RED}❌ Failed to generate public key!${C_RESET}"
+        return
+    fi
     
     local PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
     
@@ -1779,15 +1784,16 @@ EOF
     systemctl enable dnstt.service
     systemctl start dnstt.service
     
+    # Show details with PUBLIC KEY
     echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
     echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "  Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
-    echo -e "  Public Key:    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
-    echo -e "  MTU:           ${C_YELLOW}$MTU${C_RESET} (ULTIMATE BOOSTER ACTIVE)"
-    echo -e "  Forwarding:    ${C_YELLOW}$forward_desc${C_RESET}"
+    echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+    echo -e "  ${C_CYAN}MTU:${C_RESET}           ${C_YELLOW}$MTU${C_RESET} (ULTIMATE BOOSTER ACTIVE)"
+    echo -e "  ${C_CYAN}Forwarding:${C_RESET}    ${C_YELLOW}$forward_desc${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
-    echo -e "\n${C_YELLOW}IMPORTANT: Save this Public Key! You'll need it for client configuration.${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ IMPORTANT: Copy this Public Key - you'll need it for clients!${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
 }
