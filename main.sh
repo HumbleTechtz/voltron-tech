@@ -1358,7 +1358,7 @@ show_dnstt_details() {
     fi
 }
 
-# ========== INSTALL DNSTT (FIXED VERSION - BOTH PUBLIC KEY & DOMAIN WORK) ==========
+# ========== INSTALL DNSTT (PUBLIC KEY KUTOKA FALCON!) ==========
 install_dnstt() {
     clear
     show_banner
@@ -1516,14 +1516,14 @@ install_dnstt() {
     chmod +x "$DNSTT_BINARY"
     echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
     
-    # Step 6: Generate keys (THIS IS THE CRITICAL PART - SIMPLE LIKE FALCON)
+    # ========== SEHEMU YA PUBLIC KEY (KUTOKA FALCON!) ==========
     echo -e "\n${C_BLUE}[6/6] Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
     
-    # Simple key generation - exactly like Falcon
+    # Generate keys - EXACTLY KAMA FALCON
     "$DNSTT_BINARY" -gen-key -privkey-file "$DNSTT_KEYS_DIR/server.key" -pubkey-file "$DNSTT_KEYS_DIR/server.pub"
     
-    # Check if keys were created
+    # Check if keys were created - EXACTLY KAMA FALCON
     if [[ ! -f "$DNSTT_KEYS_DIR/server.key" ]]; then
         echo -e "\n${C_RED}❌ Failed to generate DNSTT keys.${C_RESET}"
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -1531,7 +1531,7 @@ install_dnstt() {
         return
     fi
     
-    # Read the public key
+    # Read the public key - EXACTLY KAMA FALCON
     local PUBLIC_KEY
     PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
     echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
