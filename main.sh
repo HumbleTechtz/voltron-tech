@@ -1358,7 +1358,63 @@ show_dnstt_details() {
     fi
 }
 
-# ========== INSTALL DNSTT (PUBLIC KEY GENERATION KAMA AWALI!) ==========
+# ========== DOWNLOAD DNSTT BINARY (FIXED WITH MULTIPLE SOURCES) ==========
+download_dnstt_binary() {
+    local arch=$(uname -m)
+    local download_success=0
+    
+    echo -e "${C_BLUE}📥 Downloading DNSTT server...${C_RESET}"
+    
+    # Source 1: GitHub (kcptun) - primary
+    echo -e "${C_YELLOW}Attempt 1: GitHub (kcptun)...${C_RESET}"
+    if [[ "$arch" == "x86_64" ]]; then
+        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz"
+    elif [[ "$arch" == "aarch64" ]]; then
+        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-arm64-20240101.tar.gz"
+    fi
+    
+    if [ -f /tmp/dnstt.tar.gz ] && [ -s /tmp/dnstt.tar.gz ]; then
+        cd /tmp
+        tar -xzf dnstt.tar.gz
+        if [ -f /tmp/server_linux_amd64 ] || [ -f /tmp/server_linux_arm64 ]; then
+            cp /tmp/server_linux_* "$DNSTT_BINARY" 2>/dev/null
+            download_success=1
+        fi
+        rm -f /tmp/dnstt.tar.gz
+    fi
+    
+    # Source 2: dnstt.network
+    if [ $download_success -eq 0 ]; then
+        echo -e "${C_YELLOW}Attempt 2: dnstt.network...${C_RESET}"
+        if [[ "$arch" == "x86_64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://dnstt.network/dnstt-server-linux-amd64"
+        elif [[ "$arch" == "aarch64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://dnstt.network/dnstt-server-linux-arm64"
+        fi
+        if [ -f "$DNSTT_BINARY" ] && [ -s "$DNSTT_BINARY" ]; then
+            download_success=1
+        fi
+    fi
+    
+    # Source 3: GitHub alternative
+    if [ $download_success -eq 0 ]; then
+        echo -e "${C_YELLOW}Attempt 3: GitHub alternative...${C_RESET}"
+        if [[ "$arch" == "x86_64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-amd64"
+        elif [[ "$arch" == "aarch64" ]]; then
+            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-arm64"
+        fi
+        if [ -f "$DNSTT_BINARY" ] && [ -s "$DNSTT_BINARY" ]; then
+            download_success=1
+        fi
+    fi
+    
+    chmod +x "$DNSTT_BINARY" 2>/dev/null
+    
+    return $download_success
+}
+
+# ========== INSTALL DNSTT (FIXED - PUBLIC KEY ITAFANYA KAZI!) ==========
 install_dnstt() {
     clear
     show_banner
@@ -1456,58 +1512,11 @@ install_dnstt() {
     echo -e "\n${C_BLUE}[4/6] MTU Selection...${C_RESET}"
     mtu_selection_during_install
     
-    # Step 5: Download and install DNSTT binary
-    echo -e "\n${C_BLUE}[5/6] Downloading DNSTT server...${C_RESET}"
-    local arch=$(uname -m)
-    local download_success=0
-    
-    # Try primary source
-    if [[ "$arch" == "x86_64" ]]; then
-        echo -e "${C_YELLOW}Downloading from GitHub (amd64)...${C_RESET}"
-        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-amd64-20240101.tar.gz"
-        
-        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
-            cd /tmp
-            tar -xzf dnstt.tar.gz
-            if [ -f /tmp/server_linux_amd64 ]; then
-                cp /tmp/server_linux_amd64 "$DNSTT_BINARY"
-                download_success=1
-            fi
-            rm -f /tmp/dnstt.tar.gz
-        fi
-    elif [[ "$arch" == "aarch64" ]]; then
-        echo -e "${C_YELLOW}Downloading from GitHub (arm64)...${C_RESET}"
-        curl -L -o /tmp/dnstt.tar.gz "https://github.com/xtaci/kcptun/releases/download/v20240101/kcptun-linux-arm64-20240101.tar.gz"
-        
-        if [ $? -eq 0 ] && [ -s /tmp/dnstt.tar.gz ]; then
-            cd /tmp
-            tar -xzf dnstt.tar.gz
-            if [ -f /tmp/server_linux_arm64 ]; then
-                cp /tmp/server_linux_arm64 "$DNSTT_BINARY"
-                download_success=1
-            fi
-            rm -f /tmp/dnstt.tar.gz
-        fi
-    fi
-    
-    # Fallback to alternative source if needed
-    if [ $download_success -eq 0 ]; then
-        echo -e "${C_YELLOW}Primary source failed. Trying alternative source...${C_RESET}"
-        if [[ "$arch" == "x86_64" ]]; then
-            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-amd64"
-            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
-                download_success=1
-            fi
-        elif [[ "$arch" == "aarch64" ]]; then
-            curl -L -o "$DNSTT_BINARY" "https://github.com/HumbleTechtz/voltron-tech/releases/download/v1.0/dnstt-server-arm64"
-            if [ $? -eq 0 ] && [ -s "$DNSTT_BINARY" ]; then
-                download_success=1
-            fi
-        fi
-    fi
-    
-    if [ $download_success -eq 0 ]; then
-        echo -e "\n${C_RED}❌ Failed to download DNSTT binary. Please check your internet connection.${C_RESET}"
+    # Step 5: Download DNSTT binary (FIXED!)
+    download_dnstt_binary
+    if [ ! -f "$DNSTT_BINARY" ] || [ ! -s "$DNSTT_BINARY" ]; then
+        echo -e "\n${C_RED}❌ Failed to download DNSTT binary after multiple attempts.${C_RESET}"
+        echo -e "${C_YELLOW}Please check your internet connection.${C_RESET}"
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
         safe_read "" dummy
         return
@@ -1516,7 +1525,7 @@ install_dnstt() {
     chmod +x "$DNSTT_BINARY"
     echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
     
-    # ========== PUBLIC KEY GENERATION (KAMA AWALI - RAHISI NA SAWA!) ==========
+    # ========== PUBLIC KEY GENERATION (KAMA AWALI - RAHISI!) ==========
     echo -e "\n${C_BLUE}[6/6] Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
     
@@ -1535,6 +1544,7 @@ install_dnstt() {
     local PUBLIC_KEY
     PUBLIC_KEY=$(cat "$DNSTT_KEYS_DIR/server.pub")
     echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
+    echo -e "${C_YELLOW}Public Key: ${PUBLIC_KEY}${C_RESET}"
     
     # Create systemd service
     echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
