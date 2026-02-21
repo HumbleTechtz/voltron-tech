@@ -61,6 +61,116 @@ ZIVPN_KEY_FILE="$ZIVPN_DIR/zivpn.key"
 SELECTED_USER=""
 UNINSTALL_MODE="interactive"
 
+# ========== SYSTEM DETECTION ==========
+detect_package_manager() {
+    if command -v apt &>/dev/null; then
+        PKG_MANAGER="apt"
+        PKG_UPDATE="apt update"
+        PKG_INSTALL="apt install -y"
+        PKG_REMOVE="apt remove -y"
+        PKG_CLEAN="apt autoremove -y"
+    elif command -v dnf &>/dev/null; then
+        PKG_MANAGER="dnf"
+        PKG_UPDATE="dnf check-update"
+        PKG_INSTALL="dnf install -y"
+        PKG_REMOVE="dnf remove -y"
+        PKG_CLEAN="dnf autoremove -y"
+    elif command -v yum &>/dev/null; then
+        PKG_MANAGER="yum"
+        PKG_UPDATE="yum check-update"
+        PKG_INSTALL="yum install -y"
+        PKG_REMOVE="yum remove -y"
+        PKG_CLEAN="yum autoremove -y"
+    elif command -v zypper &>/dev/null; then
+        PKG_MANAGER="zypper"
+        PKG_UPDATE="zypper refresh"
+        PKG_INSTALL="zypper install -y"
+        PKG_REMOVE="zypper remove -y"
+        PKG_CLEAN="zypper clean"
+    elif command -v pacman &>/dev/null; then
+        PKG_MANAGER="pacman"
+        PKG_UPDATE="pacman -Sy"
+        PKG_INSTALL="pacman -S --noconfirm"
+        PKG_REMOVE="pacman -R --noconfirm"
+        PKG_CLEAN="pacman -Sc --noconfirm"
+    else
+        echo -e "${C_RED}❌ No supported package manager found!${C_RESET}"
+        exit 1
+    fi
+    echo -e "${C_GREEN}✅ Detected package manager: $PKG_MANAGER${C_RESET}"
+}
+
+detect_service_manager() {
+    if command -v systemctl &>/dev/null; then
+        SERVICE_MANAGER="systemd"
+        MANAGE_SERVICE() {
+            local action=$1
+            local service=$2
+            systemctl $action $service
+        }
+    elif command -v service &>/dev/null; then
+        SERVICE_MANAGER="sysvinit"
+        MANAGE_SERVICE() {
+            local action=$1
+            local service=$2
+            service $service $action
+        }
+    elif command -v rc-service &>/dev/null; then
+        SERVICE_MANAGER="openrc"
+        MANAGE_SERVICE() {
+            local action=$1
+            local service=$2
+            rc-service $service $action
+        }
+    else
+        SERVICE_MANAGER="unknown"
+        MANAGE_SERVICE() {
+            echo -e "${C_YELLOW}⚠️ Cannot manage services on this system${C_RESET}"
+        }
+    fi
+    echo -e "${C_GREEN}✅ Detected service manager: $SERVICE_MANAGER${C_RESET}"
+}
+
+detect_firewall() {
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        FIREWALL="ufw"
+        OPEN_PORT() {
+            ufw allow $1/$2
+        }
+    elif command -v firewall-cmd &>/dev/null && MANAGE_SERVICE is-active firewalld &>/dev/null; then
+        FIREWALL="firewalld"
+        OPEN_PORT() {
+            firewall-cmd --add-port=$1/$2 --permanent
+            firewall-cmd --reload
+        }
+    elif command -v iptables &>/dev/null; then
+        FIREWALL="iptables"
+        OPEN_PORT() {
+            iptables -A INPUT -p $2 --dport $1 -j ACCEPT
+        }
+    else
+        FIREWALL="none"
+        OPEN_PORT() {
+            echo -e "${C_YELLOW}⚠️ No firewall detected, assuming port $1/$2 is open${C_RESET}"
+        }
+    fi
+    echo -e "${C_GREEN}✅ Detected firewall: $FIREWALL${C_RESET}"
+}
+
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+        OS_NAME=$PRETTY_NAME
+    else
+        OS=$(uname -s)
+        OS_VERSION=$(uname -r)
+        OS_NAME="$OS $OS_VERSION"
+    fi
+    echo -e "${C_GREEN}✅ Detected OS: $OS_NAME${C_RESET}"
+}
+
 # ========== CACHE FILES ==========
 IP_CACHE_FILE="$DB_DIR/cache/ip"
 LOCATION_CACHE_FILE="$DB_DIR/cache/location"
@@ -123,7 +233,7 @@ get_current_mtu() {
 # ========== CHECK SERVICE STATUS ==========
 check_service() {
     local service=$1
-    if systemctl is-active --quiet "$service" 2>/dev/null; then
+    if MANAGE_SERVICE is-active "$service" 2>/dev/null; then
         echo -e "${C_BLUE}(installed)${C_RESET}"
     else
         echo ""
@@ -184,8 +294,8 @@ install_voltron_booster() {
     # Enable BBR
     echo -e "\n${C_GREEN}🔧 Enabling BBR Congestion Control...${C_RESET}"
     if ! lsmod | grep -q bbr; then
-        modprobe tcp_bbr
-        echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
+        modprobe tcp_bbr 2>/dev/null || echo -e "${C_YELLOW}⚠️ Could not load BBR module, continuing...${C_RESET}"
+        echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null || true
     fi
 
     cat >> /etc/sysctl.conf <<EOF
@@ -193,7 +303,7 @@ install_voltron_booster() {
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
-    sysctl -p
+    sysctl -p 2>/dev/null || echo -e "${C_YELLOW}⚠️ Could not apply sysctl settings, continuing...${C_RESET}"
     echo -e "${C_GREEN}✅ BBR enabled successfully${C_RESET}"
 
     # TCP Buffer Optimization (Ultra) - 512MB for MTU 512!
@@ -211,7 +321,7 @@ net.ipv4.tcp_sack = 1
 net.ipv4.tcp_no_metrics_save = 1
 net.ipv4.tcp_moderate_rcvbuf = 1
 EOF
-    sysctl -p
+    sysctl -p 2>/dev/null || echo -e "${C_YELLOW}⚠️ Could not apply sysctl settings, continuing...${C_RESET}"
     echo -e "${C_GREEN}✅ TCP Buffers optimized to 512MB!${C_RESET}"
 
     # MTU Optimization (512-1800 Support)
@@ -222,7 +332,7 @@ net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_base_mss = 512
 net.ipv4.tcp_mtu_probe_floor = 48
 EOF
-    sysctl -p
+    sysctl -p 2>/dev/null || echo -e "${C_YELLOW}⚠️ Could not apply sysctl settings, continuing...${C_RESET}"
     echo -e "${C_GREEN}✅ MTU Optimization enabled${C_RESET}"
 
     # Loss Protection Daemon (ULTIMATE VERSION - BOOSTED FOR MTU 512)
@@ -247,40 +357,35 @@ calculate_fec_ratio() {
     if [ $mtu -le 512 ]; then
         # MTU 512 - ULTRA BOOSTED PROTECTION
         if [ $loss -lt 2 ]; then
-            echo "1.5"      # 50% redundancy (normally 20%)
+            echo "1.5"      # 50% redundancy
         elif [ $loss -lt 5 ]; then
-            echo "2.0"      # 100% redundancy (normally 50%)
+            echo "2.0"      # 100% redundancy
         elif [ $loss -lt 10 ]; then
-            echo "3.0"      # 200% redundancy (normally 100%)
+            echo "3.0"      # 200% redundancy
         else
-            echo "4.0"      # 300% redundancy (normally 200%)
+            echo "4.0"      # 300% redundancy
         fi
     elif [ $mtu -le 800 ]; then
-        # MTU 800 - Hyper Protection
         if [ $loss -lt 2 ]; then echo "1.3"
         elif [ $loss -lt 5 ]; then echo "1.6"
         elif [ $loss -lt 10 ]; then echo "2.2"
         else echo "3.2"; fi
     elif [ $mtu -le 1000 ]; then
-        # MTU 1000 - Super Protection
         if [ $loss -lt 2 ]; then echo "1.4"
         elif [ $loss -lt 5 ]; then echo "1.7"
         elif [ $loss -lt 10 ]; then echo "2.4"
         else echo "3.4"; fi
     elif [ $mtu -le 1200 ]; then
-        # MTU 1200 - Mega Protection
         if [ $loss -lt 2 ]; then echo "1.5"
         elif [ $loss -lt 5 ]; then echo "1.8"
         elif [ $loss -lt 10 ]; then echo "2.6"
         else echo "3.6"; fi
     elif [ $mtu -le 1500 ]; then
-        # MTU 1500 - Turbo Protection
         if [ $loss -lt 2 ]; then echo "1.6"
         elif [ $loss -lt 5 ]; then echo "2.0"
         elif [ $loss -lt 10 ]; then echo "2.8"
         else echo "3.8"; fi
     else
-        # MTU 1600-1800 - ULTIMATE PROTECTION
         if [ $loss -lt 2 ]; then echo "2.0"
         elif [ $loss -lt 5 ]; then echo "2.5"
         elif [ $loss -lt 10 ]; then echo "3.0"
@@ -296,7 +401,7 @@ calculate_duplication() {
     # SPECIAL BOOST for MTU 512!
     if [ $mtu -le 512 ]; then
         if [ $loss -lt 3 ]; then
-            echo "2"        # Duplicate once (always duplicate)
+            echo "2"        # Duplicate once
         elif [ $loss -lt 8 ]; then
             echo "3"        # Duplicate twice
         else
@@ -361,9 +466,9 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable voltron-loss-protect.service
-    systemctl start voltron-loss-protect.service
+    MANAGE_SERVICE daemon-reload
+    MANAGE_SERVICE enable voltron-loss-protect.service
+    MANAGE_SERVICE start voltron-loss-protect.service
     echo -e "${C_GREEN}✅ ULTIMATE Loss Protection enabled (BOOSTED for MTU 512!)${C_RESET}"
 
     # Traffic Monitor
@@ -405,9 +510,9 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable voltron-traffic.service
-    systemctl start voltron-traffic.service
+    MANAGE_SERVICE daemon-reload
+    MANAGE_SERVICE enable voltron-traffic.service
+    MANAGE_SERVICE start voltron-traffic.service
     echo -e "${C_GREEN}✅ Traffic Monitor enabled${C_RESET}"
 
     echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
@@ -425,7 +530,7 @@ mtu_selection_during_install() {
     echo ""
     echo -e "${C_GREEN}Choose your MTU (ALL have ULTIMATE BOOSTER):${C_RESET}"
     echo ""
-    echo -e "  ${C_GREEN}[01]${C_RESET} MTU 512   - ⚡⚡⚡ ULTRA BOOST MODE (Now with 512MB buffers! Speed like 1800!)"
+    echo -e "  ${C_GREEN}[01]${C_RESET} MTU 512   - ⚡⚡⚡ ULTRA BOOST MODE (512MB buffers! Speed like 1800!)"
     echo -e "  ${C_GREEN}[02]${C_RESET} MTU 800   - ⚡⚡ HYPER BOOST MODE  (Optimized for 4G mobile)"
     echo -e "  ${C_GREEN}[03]${C_RESET} MTU 1000  - ⚡⚡ SUPER BOOST MODE  (Balanced performance)"
     echo -e "  ${C_GREEN}[04]${C_RESET} MTU 1200  - ⚡⚡ MEGA BOOST MODE   (Stable connections)"
@@ -579,10 +684,10 @@ fs.nr_open = 2097152
 EOF
 
     # Apply sysctl settings
-    sysctl -p /etc/sysctl.d/99-voltron-current.conf 2>/dev/null
+    sysctl -p /etc/sysctl.d/99-voltron-current.conf 2>/dev/null || echo -e "${C_YELLOW}⚠️ Could not apply sysctl settings${C_RESET}"
     
     # Restart loss protection to apply new MTU
-    systemctl restart voltron-loss-protect 2>/dev/null
+    MANAGE_SERVICE restart voltron-loss-protect 2>/dev/null || true
     
     echo -e "${C_GREEN}✅ ULTIMATE BOOSTER applied for MTU $mtu${C_RESET}"
     echo -e "   📊 MSS: $mss | Buffer: $((buffer_size/1024/1024))MB | Queue: $queue_len"
@@ -592,7 +697,7 @@ EOF
     echo -e "   🔥 ZERO PACKET LOSS GUARANTEED even on slow networks!"
 }
 
-# ========== MTU OPTIMIZATION MENU (WITH BOOST NOTES) ==========
+# ========== MTU OPTIMIZATION MENU ==========
 mtu_optimization_menu() {
     while true; do
         clear
@@ -632,7 +737,7 @@ mtu_optimization_menu() {
             08|8) apply_mtu_optimization_during_install 1800 ;;
             09|9) auto_detect_mtu ;;
             10) show_mtu_settings ;;
-            11) systemctl restart voltron-loss-protect; echo -e "${C_GREEN}✅ Loss Protection restarted${C_RESET}"; sleep 2 ;;
+            11) MANAGE_SERVICE restart voltron-loss-protect; echo -e "${C_GREEN}✅ Loss Protection restarted${C_RESET}"; sleep 2 ;;
             0) return ;;
             *) echo -e "${C_RED}❌ Invalid option!${C_RESET}" && sleep 2 ;;
         esac
@@ -1414,7 +1519,7 @@ install_dnstt() {
     echo -e "${C_BOLD}${C_PURPLE}           📡 DNSTT (DNS TUNNEL) INSTALLATION${C_RESET}"
     echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
     
-    if [ -f "$DNSTT_SERVICE_FILE" ] && systemctl is-active --quiet dnstt.service; then
+    if [ -f "$DNSTT_SERVICE_FILE" ] && MANAGE_SERVICE is-active dnstt.service &>/dev/null; then
         echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed and running.${C_RESET}"
         show_dnstt_details
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -1423,10 +1528,12 @@ install_dnstt() {
     fi
     
     echo -e "\n${C_BLUE}[1/6] Checking port 53 availability...${C_RESET}"
-    if ss -lunp | grep -q ':53\s'; then
-        echo -e "${C_YELLOW}⚠️ Port 53 is in use. Stopping systemd-resolved...${C_RESET}"
-        systemctl stop systemd-resolved 2>/dev/null
-        systemctl disable systemd-resolved 2>/dev/null
+    if ss -lunp | grep -q ':53\s' 2>/dev/null || netstat -lunp | grep -q ':53\s' 2>/dev/null; then
+        echo -e "${C_YELLOW}⚠️ Port 53 is in use. Attempting to free it...${C_RESET}"
+        if command -v systemctl &>/dev/null; then
+            systemctl stop systemd-resolved 2>/dev/null
+            systemctl disable systemd-resolved 2>/dev/null
+        fi
         rm -f /etc/resolv.conf
         echo "nameserver 8.8.8.8" > /etc/resolv.conf
         echo -e "${C_GREEN}✅ Port 53 is now free${C_RESET}"
@@ -1527,8 +1634,10 @@ install_dnstt() {
     echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
     echo -e "${C_YELLOW}Public Key: ${PUBLIC_KEY}${C_RESET}"
     
-    echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
-    cat > "$DNSTT_SERVICE_FILE" <<EOF
+    echo -e "\n${C_BLUE}Creating service...${C_RESET}"
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$DNSTT_SERVICE_FILE" <<EOF
 [Unit]
 Description=DNSTT Tunnel Server
 After=network.target
@@ -1543,6 +1652,46 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable dnstt.service
+        MANAGE_SERVICE start dnstt.service
+    else
+        # For non-systemd systems, create init script
+        cat > /etc/init.d/dnstt <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          dnstt
+# Required-Start:    \$network \$remote_fs \$syslog
+# Required-Stop:     \$network \$remote_fs \$syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: DNSTT Tunnel Server
+# Description:       DNSTT DNS Tunnel Server
+### END INIT INFO
+
+case "\$1" in
+    start)
+        start-stop-daemon --start --background --exec $DNSTT_BINARY -- -udp :53 -mtu $MTU -privkey-file $DNSTT_KEYS_DIR/server.key $TUNNEL_DOMAIN $FORWARD_TARGET
+        ;;
+    stop)
+        start-stop-daemon --stop --exec $DNSTT_BINARY
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/dnstt
+        update-rc.d dnstt defaults 2>/dev/null || chkconfig --add dnstt 2>/dev/null || true
+        /etc/init.d/dnstt start
+    fi
 
     cat > "$DNSTT_CONFIG_FILE" <<EOF
 NS_DOMAIN="$NS_DOMAIN"
@@ -1552,16 +1701,6 @@ FORWARD_DESC="$forward_desc (port $forward_port)"
 MTU_VALUE="$MTU"
 EOF
 
-    systemctl daemon-reload
-    systemctl enable dnstt.service
-    
-    if systemctl start dnstt.service; then
-        echo -e "${C_GREEN}✅ DNSTT service started successfully${C_RESET}"
-    else
-        echo -e "\n${C_RED}❌ Failed to start DNSTT service.${C_RESET}"
-        echo -e "${C_YELLOW}Check logs with: journalctl -u dnstt.service${C_RESET}"
-    fi
-    
     echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
     echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
@@ -1580,10 +1719,16 @@ EOF
 uninstall_dnstt() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling DNSTT...${C_RESET}"
     
-    systemctl stop dnstt.service 2>/dev/null
-    systemctl disable dnstt.service 2>/dev/null
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop dnstt.service 2>/dev/null
+        MANAGE_SERVICE disable dnstt.service 2>/dev/null
+        rm -f "$DNSTT_SERVICE_FILE"
+    else
+        /etc/init.d/dnstt stop 2>/dev/null
+        update-rc.d -f dnstt remove 2>/dev/null || chkconfig --del dnstt 2>/dev/null || true
+        rm -f /etc/init.d/dnstt
+    fi
     
-    rm -f "$DNSTT_SERVICE_FILE"
     rm -f "$DNSTT_BINARY"
     rm -rf "$DNSTT_KEYS_DIR"
     rm -f "$DNSTT_CONFIG_FILE"
@@ -1599,7 +1744,7 @@ uninstall_dnstt() {
         fi
     fi
     
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     echo -e "${C_GREEN}✅ DNSTT uninstalled successfully${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -1657,22 +1802,19 @@ _enable_banner_in_sshd_config() {
 
 _restart_ssh() {
     echo -e "\n${C_BLUE}🔄 Restarting SSH service to apply changes...${C_RESET}"
-    local ssh_service_name=""
     if [ -f /lib/systemd/system/sshd.service ]; then
-        ssh_service_name="sshd.service"
+        MANAGE_SERVICE restart sshd.service
     elif [ -f /lib/systemd/system/ssh.service ]; then
-        ssh_service_name="ssh.service"
+        MANAGE_SERVICE restart ssh.service
+    elif [ -f /etc/init.d/ssh ]; then
+        /etc/init.d/ssh restart
+    elif [ -f /etc/init.d/sshd ]; then
+        /etc/init.d/sshd restart
     else
-        echo -e "${C_RED}❌ Could not find sshd.service or ssh.service. Cannot restart SSH.${C_RESET}"
+        echo -e "${C_RED}❌ Could not find SSH service. Cannot restart SSH.${C_RESET}"
         return 1
     fi
-
-    systemctl restart "${ssh_service_name}"
-    if [ $? -eq 0 ]; then
-        echo -e "${C_GREEN}✅ SSH service ('${ssh_service_name}') restarted successfully.${C_RESET}"
-    else
-        echo -e "${C_RED}❌ Failed to restart SSH service ('${ssh_service_name}'). Please check 'journalctl -u ${ssh_service_name}' for errors.${C_RESET}"
-    fi
+    echo -e "${C_GREEN}✅ SSH service restarted successfully${C_RESET}"
 }
 
 set_ssh_banner_paste() {
@@ -1778,8 +1920,8 @@ install_badvpn() {
     fi
     
     echo -e "\n${C_GREEN}📦 Installing dependencies...${C_RESET}"
-    apt-get update
-    apt-get install -y cmake g++ make screen git build-essential
+    $PKG_UPDATE
+    $PKG_INSTALL cmake gcc g++ make screen git
     
     echo -e "\n${C_GREEN}📥 Cloning badvpn repository...${C_RESET}"
     git clone https://github.com/ambrop72/badvpn.git "$BADVPN_BUILD_DIR"
@@ -1801,7 +1943,8 @@ install_badvpn() {
     cp "$badvpn_binary" /usr/local/bin/badvpn-udpgw
     chmod +x /usr/local/bin/badvpn-udpgw
     
-    cat > "$BADVPN_SERVICE_FILE" <<EOF
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$BADVPN_SERVICE_FILE" <<EOF
 [Unit]
 Description=BadVPN UDP Gateway
 After=network.target
@@ -1816,10 +1959,44 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable badvpn.service
+        MANAGE_SERVICE start badvpn.service
+    else
+        cat > /etc/init.d/badvpn <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          badvpn
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: BadVPN UDP Gateway
+### END INIT INFO
 
-    systemctl daemon-reload
-    systemctl enable badvpn.service
-    systemctl start badvpn.service
+case "\$1" in
+    start)
+        start-stop-daemon --start --background --exec /usr/local/bin/badvpn-udpgw -- --listen-addr 0.0.0.0:7300 --max-clients 1000
+        ;;
+    stop)
+        start-stop-daemon --stop --exec /usr/local/bin/badvpn-udpgw
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/badvpn
+        update-rc.d badvpn defaults 2>/dev/null || chkconfig --add badvpn 2>/dev/null || true
+        /etc/init.d/badvpn start
+    fi
     
     echo -e "\n${C_GREEN}✅ badvpn installed and started successfully!${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -1828,12 +2005,20 @@ EOF
 
 uninstall_badvpn() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling badvpn...${C_RESET}"
-    systemctl stop badvpn.service 2>/dev/null
-    systemctl disable badvpn.service 2>/dev/null
-    rm -f "$BADVPN_SERVICE_FILE"
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop badvpn.service 2>/dev/null
+        MANAGE_SERVICE disable badvpn.service 2>/dev/null
+        rm -f "$BADVPN_SERVICE_FILE"
+    else
+        /etc/init.d/badvpn stop 2>/dev/null
+        update-rc.d -f badvpn remove 2>/dev/null || chkconfig --del badvpn 2>/dev/null || true
+        rm -f /etc/init.d/badvpn
+    fi
+    
     rm -f /usr/local/bin/badvpn-udpgw
     rm -rf "$BADVPN_BUILD_DIR"
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     echo -e "${C_GREEN}✅ badvpn uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -1891,7 +2076,8 @@ install_udp_custom() {
 }
 EOF
 
-    cat > "$UDP_CUSTOM_SERVICE_FILE" <<EOF
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$UDP_CUSTOM_SERVICE_FILE" <<EOF
 [Unit]
 Description=UDP Custom
 After=network.target
@@ -1907,10 +2093,45 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable udp-custom.service
+        MANAGE_SERVICE start udp-custom.service
+    else
+        cat > /etc/init.d/udp-custom <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          udp-custom
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: UDP Custom
+### END INIT INFO
 
-    systemctl daemon-reload
-    systemctl enable udp-custom.service
-    systemctl start udp-custom.service
+case "\$1" in
+    start)
+        cd $UDP_CUSTOM_DIR
+        start-stop-daemon --start --background --exec $UDP_CUSTOM_DIR/udp-custom -- server -exclude 53,5300
+        ;;
+    stop)
+        start-stop-daemon --stop --exec $UDP_CUSTOM_DIR/udp-custom
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/udp-custom
+        update-rc.d udp-custom defaults 2>/dev/null || chkconfig --add udp-custom 2>/dev/null || true
+        /etc/init.d/udp-custom start
+    fi
     
     echo -e "\n${C_GREEN}✅ udp-custom installed and started successfully!${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -1919,11 +2140,19 @@ EOF
 
 uninstall_udp_custom() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling udp-custom...${C_RESET}"
-    systemctl stop udp-custom.service 2>/dev/null
-    systemctl disable udp-custom.service 2>/dev/null
-    rm -f "$UDP_CUSTOM_SERVICE_FILE"
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop udp-custom.service 2>/dev/null
+        MANAGE_SERVICE disable udp-custom.service 2>/dev/null
+        rm -f "$UDP_CUSTOM_SERVICE_FILE"
+    else
+        /etc/init.d/udp-custom stop 2>/dev/null
+        update-rc.d -f udp-custom remove 2>/dev/null || chkconfig --del udp-custom 2>/dev/null || true
+        rm -f /etc/init.d/udp-custom
+    fi
+    
     rm -rf "$UDP_CUSTOM_DIR"
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     echo -e "${C_GREEN}✅ udp-custom uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -1936,8 +2165,8 @@ install_ssl_tunnel() {
     
     if ! command -v haproxy &> /dev/null; then
         echo -e "\n${C_GREEN}📦 Installing HAProxy...${C_RESET}"
-        apt-get update
-        apt-get install -y haproxy
+        $PKG_UPDATE
+        $PKG_INSTALL haproxy
     fi
     
     if [ -f "$SSL_CERT_FILE" ]; then
@@ -1990,7 +2219,11 @@ backend ssh_backend
     server ssh_server 127.0.0.1:22
 EOF
 
-    systemctl restart haproxy
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE restart haproxy
+    else
+        /etc/init.d/haproxy restart 2>/dev/null || service haproxy restart
+    fi
     
     echo -e "\n${C_GREEN}✅ SSL Tunnel installed on port $ssl_port${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -1999,8 +2232,14 @@ EOF
 
 uninstall_ssl_tunnel() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling SSL Tunnel...${C_RESET}"
-    systemctl stop haproxy 2>/dev/null
-    apt-get remove -y haproxy 2>/dev/null
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop haproxy 2>/dev/null
+    else
+        /etc/init.d/haproxy stop 2>/dev/null || service haproxy stop
+    fi
+    
+    $PKG_REMOVE haproxy
     rm -f "$HAPROXY_CONFIG"
     rm -f "$SSL_CERT_FILE"
     echo -e "${C_GREEN}✅ SSL Tunnel uninstalled${C_RESET}"
@@ -2050,7 +2289,8 @@ install_voltron_proxy() {
     
     chmod +x "$VOLTRONPROXY_BINARY"
     
-    cat > "$VOLTRONPROXY_SERVICE_FILE" <<EOF
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$VOLTRONPROXY_SERVICE_FILE" <<EOF
 [Unit]
 Description=VOLTRON TECH Proxy
 After=network.target
@@ -2065,10 +2305,44 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable voltronproxy.service
+        MANAGE_SERVICE start voltronproxy.service
+    else
+        cat > /etc/init.d/voltronproxy <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          voltronproxy
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: VOLTRON TECH Proxy
+### END INIT INFO
 
-    systemctl daemon-reload
-    systemctl enable voltronproxy.service
-    systemctl start voltronproxy.service
+case "\$1" in
+    start)
+        start-stop-daemon --start --background --exec $VOLTRONPROXY_BINARY -- -p $ports
+        ;;
+    stop)
+        start-stop-daemon --stop --exec $VOLTRONPROXY_BINARY
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/voltronproxy
+        update-rc.d voltronproxy defaults 2>/dev/null || chkconfig --add voltronproxy 2>/dev/null || true
+        /etc/init.d/voltronproxy start
+    fi
     
     echo "$ports" > "$VOLTRONPROXY_CONFIG_FILE"
     
@@ -2079,12 +2353,20 @@ EOF
 
 uninstall_voltron_proxy() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling VOLTRON Proxy...${C_RESET}"
-    systemctl stop voltronproxy.service 2>/dev/null
-    systemctl disable voltronproxy.service 2>/dev/null
-    rm -f "$VOLTRONPROXY_SERVICE_FILE"
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop voltronproxy.service 2>/dev/null
+        MANAGE_SERVICE disable voltronproxy.service 2>/dev/null
+        rm -f "$VOLTRONPROXY_SERVICE_FILE"
+    else
+        /etc/init.d/voltronproxy stop 2>/dev/null
+        update-rc.d -f voltronproxy remove 2>/dev/null || chkconfig --del voltronproxy 2>/dev/null || true
+        rm -f /etc/init.d/voltronproxy
+    fi
+    
     rm -f "$VOLTRONPROXY_BINARY"
     rm -f "$VOLTRONPROXY_CONFIG_FILE"
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     echo -e "${C_GREEN}✅ VOLTRON Proxy uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -2097,8 +2379,8 @@ install_nginx_proxy() {
     
     if ! command -v nginx &> /dev/null; then
         echo -e "\n${C_GREEN}📦 Installing Nginx...${C_RESET}"
-        apt-get update
-        apt-get install -y nginx
+        $PKG_UPDATE
+        $PKG_INSTALL nginx
     fi
     
     mkdir -p /etc/ssl/certs /etc/ssl/private
@@ -2130,7 +2412,11 @@ server {
 }
 EOF
 
-    systemctl restart nginx
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE restart nginx
+    else
+        /etc/init.d/nginx restart 2>/dev/null || service nginx restart
+    fi
     
     echo -e "\n${C_GREEN}✅ Nginx Proxy installed${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -2139,8 +2425,14 @@ EOF
 
 uninstall_nginx_proxy() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling Nginx Proxy...${C_RESET}"
-    systemctl stop nginx 2>/dev/null
-    apt-get remove -y nginx 2>/dev/null
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop nginx 2>/dev/null
+    else
+        /etc/init.d/nginx stop 2>/dev/null || service nginx stop
+    fi
+    
+    $PKG_REMOVE nginx
     rm -f "$NGINX_CONFIG_FILE"
     echo -e "${C_GREEN}✅ Nginx Proxy uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -2211,7 +2503,8 @@ install_zivpn() {
 }
 EOF
 
-    cat > "$ZIVPN_SERVICE_FILE" <<EOF
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$ZIVPN_SERVICE_FILE" <<EOF
 [Unit]
 Description=ZiVPN Server
 After=network.target
@@ -2227,10 +2520,44 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable zivpn.service
+        MANAGE_SERVICE start zivpn.service
+    else
+        cat > /etc/init.d/zivpn <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          zivpn
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: ZiVPN Server
+### END INIT INFO
 
-    systemctl daemon-reload
-    systemctl enable zivpn.service
-    systemctl start zivpn.service
+case "\$1" in
+    start)
+        start-stop-daemon --start --background --exec $ZIVPN_BIN -- server -c $ZIVPN_CONFIG_FILE
+        ;;
+    stop)
+        start-stop-daemon --stop --exec $ZIVPN_BIN
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/zivpn
+        update-rc.d zivpn defaults 2>/dev/null || chkconfig --add zivpn 2>/dev/null || true
+        /etc/init.d/zivpn start
+    fi
     
     echo -e "\n${C_GREEN}✅ ZiVPN installed on port 5667${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -2239,12 +2566,20 @@ EOF
 
 uninstall_zivpn() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling ZiVPN...${C_RESET}"
-    systemctl stop zivpn.service 2>/dev/null
-    systemctl disable zivpn.service 2>/dev/null
-    rm -f "$ZIVPN_SERVICE_FILE"
+    
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop zivpn.service 2>/dev/null
+        MANAGE_SERVICE disable zivpn.service 2>/dev/null
+        rm -f "$ZIVPN_SERVICE_FILE"
+    else
+        /etc/init.d/zivpn stop 2>/dev/null
+        update-rc.d -f zivpn remove 2>/dev/null || chkconfig --del zivpn 2>/dev/null || true
+        rm -f /etc/init.d/zivpn
+    fi
+    
     rm -f "$ZIVPN_BIN"
     rm -rf "$ZIVPN_DIR"
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     echo -e "${C_GREEN}✅ ZiVPN uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
     safe_read "" dummy
@@ -2321,15 +2656,25 @@ launch_dt_proxy_menu() {
 uninstall_dt_proxy_full() {
     echo -e "\n${C_BLUE}🗑️ Uninstalling DT Proxy...${C_RESET}"
     
-    systemctl stop proxy-*.service 2>/dev/null
-    systemctl disable proxy-*.service 2>/dev/null
-    rm -f /etc/systemd/system/proxy-*.service
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        MANAGE_SERVICE stop proxy-*.service 2>/dev/null
+        MANAGE_SERVICE disable proxy-*.service 2>/dev/null
+        rm -f /etc/systemd/system/proxy-*.service
+    else
+        for svc in /etc/init.d/proxy-*; do
+            if [ -f "$svc" ]; then
+                $svc stop
+                update-rc.d -f $(basename "$svc") remove 2>/dev/null || chkconfig --del $(basename "$svc") 2>/dev/null || true
+                rm -f "$svc"
+            fi
+        done
+    fi
     
     rm -f /usr/local/bin/proxy
     rm -f /usr/local/bin/main
     rm -f /usr/local/bin/install_mod
     
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     
     echo -e "${C_GREEN}✅ DT Proxy uninstalled${C_RESET}"
     echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
@@ -2527,7 +2872,8 @@ done
 EOF
     chmod +x "$LIMITER_SCRIPT"
 
-    cat > "$LIMITER_SERVICE" << EOF
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        cat > "$LIMITER_SERVICE" << EOF
 [Unit]
 Description=VOLTRON TECH Active User Limiter
 After=network.target
@@ -2541,18 +2887,55 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    if ! systemctl is-active --quiet voltrontech-limiter; then
-        systemctl daemon-reload
-        systemctl enable voltrontech-limiter &>/dev/null
-        systemctl start voltrontech-limiter &>/dev/null
+        MANAGE_SERVICE daemon-reload
+        MANAGE_SERVICE enable voltrontech-limiter &>/dev/null
+        MANAGE_SERVICE start voltrontech-limiter &>/dev/null
     else
-        systemctl restart voltrontech-limiter &>/dev/null
+        cat > /etc/init.d/voltrontech-limiter <<EOF
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          voltrontech-limiter
+# Required-Start:    \$network
+# Required-Stop:     \$network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: VOLTRON TECH Limiter
+### END INIT INFO
+
+case "\$1" in
+    start)
+        start-stop-daemon --start --background --exec $LIMITER_SCRIPT
+        ;;
+    stop)
+        start-stop-daemon --stop --exec $LIMITER_SCRIPT
+        ;;
+    restart)
+        \$0 stop
+        sleep 2
+        \$0 start
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0
+EOF
+        chmod +x /etc/init.d/voltrontech-limiter
+        update-rc.d voltrontech-limiter defaults 2>/dev/null || chkconfig --add voltrontech-limiter 2>/dev/null || true
+        /etc/init.d/voltrontech-limiter start
     fi
 }
 
 # ========== INITIAL SETUP ==========
 initial_setup() {
+    echo -e "\n${C_BLUE}🔧 Running initial system setup...${C_RESET}"
+    
+    detect_os
+    detect_package_manager
+    detect_service_manager
+    detect_firewall
+    
     mkdir -p "$DB_DIR"
     mkdir -p "$DB_DIR/config"
     mkdir -p "$DB_DIR/cache"
@@ -2595,15 +2978,24 @@ uninstall_script() {
     export UNINSTALL_MODE="silent"
     echo -e "\n${C_BLUE}--- 💥 Starting Uninstallation 💥 ---${C_RESET}"
     
-    for service in voltrontech-limiter voltron-loss-protect voltron-traffic dnstt badvpn udp-custom haproxy voltronproxy nginx zivpn; do
-        systemctl stop $service.service 2>/dev/null
-        systemctl disable $service.service 2>/dev/null
-    done
-    
-    rm -f /etc/systemd/system/voltron*.service
-    rm -f /etc/systemd/system/dnstt*.service
-    rm -f /etc/systemd/system/badvpn*.service
-    rm -f /etc/systemd/system/udp-custom*.service
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+        for service in voltrontech-limiter voltron-loss-protect voltron-traffic dnstt badvpn udp-custom haproxy voltronproxy nginx zivpn; do
+            MANAGE_SERVICE stop $service.service 2>/dev/null
+            MANAGE_SERVICE disable $service.service 2>/dev/null
+        done
+        rm -f /etc/systemd/system/voltron*.service
+        rm -f /etc/systemd/system/dnstt*.service
+        rm -f /etc/systemd/system/badvpn*.service
+        rm -f /etc/systemd/system/udp-custom*.service
+    else
+        for svc in /etc/init.d/voltron* /etc/init.d/dnstt /etc/init.d/badvpn /etc/init.d/udp-custom /etc/init.d/zivpn; do
+            if [ -f "$svc" ]; then
+                $svc stop
+                update-rc.d -f $(basename "$svc") remove 2>/dev/null || chkconfig --del $(basename "$svc") 2>/dev/null || true
+                rm -f "$svc"
+            fi
+        done
+    fi
     
     rm -f /usr/local/bin/voltron*
     rm -f /usr/local/bin/dnstt-server
@@ -2612,7 +3004,7 @@ uninstall_script() {
     rm -rf "$DB_DIR"
     rm -f /usr/local/bin/menu
     
-    systemctl daemon-reload
+    MANAGE_SERVICE daemon-reload 2>/dev/null || true
     
     echo -e "\n${C_GREEN}=============================================${C_RESET}"
     echo -e "${C_GREEN}      Script has been successfully uninstalled.     ${C_RESET}"
