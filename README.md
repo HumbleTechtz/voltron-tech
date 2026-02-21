@@ -295,7 +295,7 @@ A: In the protocols menu, installed protocols show (installed) in blue next to t
 
 Contact Information
 
-· WhatsApp: +255 713 628 668
+· WhatsApp: +255 65451444
 · Email: voltrontechtx@gmail.com
 · GitHub: HumbleTechtz/voltron-tech
 
