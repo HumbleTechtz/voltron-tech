@@ -196,7 +196,7 @@ EOF
     sysctl -p
     echo -e "${C_GREEN}✅ BBR enabled successfully${C_RESET}"
 
-    # TCP Buffer Optimization (Ultra) - BIGGER BUFFERS!
+    # TCP Buffer Optimization (Ultra) - 512MB for MTU 512!
     echo -e "\n${C_GREEN}📊 Optimizing TCP Buffers for MAXIMUM SPEED (512MB buffers!)...${C_RESET}"
     cat >> /etc/sysctl.conf <<EOF
 # VOLTRON TECH ULTIMATE BOOSTER - TCP Buffers (ULTRA)
@@ -679,7 +679,691 @@ show_banner() {
     echo ""
 }
 
-# ========== DOWNLOAD DNSTT BINARY (FIXED) ==========
+# ========== USER MANAGEMENT FUNCTIONS ==========
+_is_valid_ipv4() {
+    local ip=$1
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+_select_user_interface() {
+    local title="$1"
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}${title}${C_RESET}\n"
+    if [[ ! -s $DB_FILE ]]; then
+        echo -e "${C_YELLOW}ℹ️ No users found in the database.${C_RESET}"
+        SELECTED_USER="NO_USERS"
+        return
+    fi
+    local search_term
+    safe_read "👉 Enter a search term (or press Enter to list all): " search_term
+    if [[ -z "$search_term" ]]; then
+        mapfile -t users < <(cut -d: -f1 "$DB_FILE" | sort)
+    else
+        mapfile -t users < <(cut -d: -f1 "$DB_FILE" | grep -i "$search_term" | sort)
+    fi
+    if [ ${#users[@]} -eq 0 ]; then
+        echo -e "\n${C_YELLOW}ℹ️ No users found matching your criteria.${C_RESET}"
+        SELECTED_USER="NO_USERS"
+        return
+    fi
+    echo -e "\nPlease select a user:\n"
+    for i in "${!users[@]}"; do
+        printf "  ${C_GREEN}%2d)${C_RESET} %s\n" "$((i+1))" "${users[$i]}"
+    done
+    echo -e "\n  ${C_RED} 0)${C_RESET} ↩️ Cancel and return to main menu"
+    echo
+    local choice
+    while true; do
+        safe_read "👉 Enter the number of the user: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -le "${#users[@]}" ]; then
+            if [ "$choice" -eq 0 ]; then
+                SELECTED_USER=""
+                return
+            else
+                SELECTED_USER="${users[$((choice-1))]}"
+                return
+            fi
+        else
+            echo -e "${C_RED}❌ Invalid selection. Please try again.${C_RESET}"
+        fi
+    done
+}
+
+get_user_status() {
+    local username="$1"
+    
+    if ! id "$username" &>/dev/null; then 
+        echo -e "${C_RED}NOT FOUND${C_RESET}"
+        return
+    fi
+    
+    local expiry_date=$(grep "^$username:" "$DB_FILE" | cut -d: -f3)
+    
+    if passwd -S "$username" 2>/dev/null | grep -q " L "; then 
+        echo -e "${C_YELLOW}LOCKED${C_RESET}"
+        return
+    fi
+    
+    local expiry_ts=$(date -d "$expiry_date" +%s 2>/dev/null || echo 0)
+    local current_ts=$(date +%s)
+    
+    if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
+        echo -e "${C_RED}EXPIRED${C_RESET}"
+        return
+    fi
+    
+    echo -e "${C_GREEN}ACTIVE${C_RESET}"
+}
+
+create_user() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- ✨ Create New SSH User ---${C_RESET}"
+    
+    local username
+    safe_read "👉 Enter username (or '0' to cancel): " username
+    if [[ "$username" == "0" ]]; then
+        echo -e "\n${C_YELLOW}❌ User creation cancelled.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    if [[ -z "$username" ]]; then
+        echo -e "\n${C_RED}❌ Error: Username cannot be empty.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    if id "$username" &>/dev/null || grep -q "^$username:" "$DB_FILE"; then
+        echo -e "\n${C_RED}❌ Error: User '$username' already exists.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local password=""
+    while true; do
+        safe_read "🔑 Enter new password: " password
+        if [[ -z "$password" ]]; then
+            echo -e "${C_RED}❌ Password cannot be empty. Please try again.${C_RESET}"
+        else
+            break
+        fi
+    done
+    
+    local days
+    safe_read "🗓️ Enter account duration (in days): " days
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then
+        echo -e "\n${C_RED}❌ Invalid number.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local limit
+    safe_read "📶 Enter simultaneous connection limit: " limit
+    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+        echo -e "\n${C_RED}❌ Invalid number.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local expire_date
+    expire_date=$(date -d "+$days days" +%Y-%m-%d)
+    useradd -m -s /usr/sbin/nologin "$username"
+    echo "$username:$password" | chpasswd
+    chage -E "$expire_date" "$username"
+    echo "$username:$password:$expire_date:$limit" >> "$DB_FILE"
+    
+    clear
+    show_banner
+    echo -e "${C_GREEN}✅ User '$username' created successfully!${C_RESET}\n"
+    echo -e "  - 👤 Username:          ${C_YELLOW}$username${C_RESET}"
+    echo -e "  - 🔑 Password:          ${C_YELLOW}$password${C_RESET}"
+    echo -e "  - 🗓️ Expires on:        ${C_YELLOW}$expire_date${C_RESET}"
+    echo -e "  - 📶 Connection Limit:  ${C_YELLOW}$limit${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+delete_user() {
+    _select_user_interface "--- 🗑️ Delete a User ---"
+    local username=$SELECTED_USER
+    
+    if [[ "$username" == "NO_USERS" ]] || [[ -z "$username" ]]; then
+        if [[ "$username" == "NO_USERS" ]]; then
+            echo -e "\n${C_YELLOW}ℹ️ No users found in database.${C_RESET}"
+        fi
+        
+        local manual_user
+        safe_read "👉 Type username to MANUALLY delete (or '0' to cancel): " manual_user
+        if [[ "$manual_user" == "0" ]] || [[ -z "$manual_user" ]]; then
+            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+        username="$manual_user"
+        
+        if ! id "$username" &>/dev/null; then
+             echo -e "\n${C_RED}❌ Error: User '$username' does not exist on this system.${C_RESET}"
+             echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+             safe_read "" dummy
+             return
+        fi
+        
+        if grep -q "^$username:" "$DB_FILE"; then
+            echo -e "\n${C_YELLOW}ℹ️ User '$username' is in the database. Please use the normal selection method.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+        
+        echo -e "${C_YELLOW}⚠️ User '$username' exists on the system but is NOT in the database.${C_RESET}"
+    fi
+
+    local confirm
+    safe_read "👉 Are you sure you want to PERMANENTLY delete '$username'? (y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then
+        echo -e "\n${C_YELLOW}❌ Deletion cancelled.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "${C_BLUE}🔌 Force killing active connections for $username...${C_RESET}"
+    killall -u "$username" -9 &>/dev/null
+    sleep 1
+
+    userdel -r "$username" &>/dev/null
+    if [ $? -eq 0 ]; then
+         echo -e "\n${C_GREEN}✅ System user '$username' has been deleted.${C_RESET}"
+    else
+         echo -e "\n${C_RED}❌ Failed to delete system user '$username'.${C_RESET}"
+    fi
+
+    sed -i "/^$username:/d" "$DB_FILE"
+    echo -e "${C_GREEN}✅ User '$username' has been completely removed.${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+edit_user() {
+    _select_user_interface "--- ✏️ Edit a User ---"
+    local username=$SELECTED_USER
+    if [[ "$username" == "NO_USERS" ]] || [[ -z "$username" ]]; then
+        return
+    fi
+    
+    while true; do
+        clear
+        show_banner
+        echo -e "${C_BOLD}${C_PURPLE}--- Editing User: ${C_YELLOW}$username${C_PURPLE} ---${C_RESET}"
+        echo -e "\nSelect a detail to edit:\n"
+        echo -e "  ${C_GREEN}1)${C_RESET} 🔑 Change Password"
+        echo -e "  ${C_GREEN}2)${C_RESET} 🗓️ Change Expiration Date"
+        echo -e "  ${C_GREEN}3)${C_RESET} 📶 Change Connection Limit"
+        echo -e "\n  ${C_RED}0)${C_RESET} ✅ Finish Editing"
+        echo
+        
+        local edit_choice
+        safe_read "👉 Enter your choice: " edit_choice
+        
+        case $edit_choice in
+            1)
+               local new_pass=""
+               while true; do
+                   safe_read "Enter new password: " new_pass
+                   if [[ -z "$new_pass" ]]; then
+                       echo -e "${C_RED}❌ Password cannot be empty. Please try again.${C_RESET}"
+                   else
+                       break
+                   fi
+               done
+               echo "$username:$new_pass" | chpasswd
+               local current_line=$(grep "^$username:" "$DB_FILE")
+               local expiry=$(echo "$current_line" | cut -d: -f3)
+               local limit=$(echo "$current_line" | cut -d: -f4)
+               sed -i "s/^$username:.*/$username:$new_pass:$expiry:$limit/" "$DB_FILE"
+               echo -e "\n${C_GREEN}✅ Password for '$username' changed successfully.${C_RESET}"
+               echo -e "New Password: ${C_YELLOW}$new_pass${C_RESET}"
+               ;;
+            2)
+               local days
+               safe_read "Enter new duration (in days from today): " days
+               if [[ "$days" =~ ^[0-9]+$ ]]; then
+                   local new_expire_date=$(date -d "+$days days" +%Y-%m-%d)
+                   chage -E "$new_expire_date" "$username"
+                   local current_line=$(grep "^$username:" "$DB_FILE")
+                   local pass=$(echo "$current_line" | cut -d: -f2)
+                   local limit=$(echo "$current_line" | cut -d: -f4)
+                   sed -i "s/^$username:.*/$username:$pass:$new_expire_date:$limit/" "$DB_FILE"
+                   echo -e "\n${C_GREEN}✅ Expiration for '$username' set to ${C_YELLOW}$new_expire_date${C_RESET}."
+               else
+                   echo -e "\n${C_RED}❌ Invalid number of days.${C_RESET}"
+               fi
+               ;;
+            3)
+               local new_limit
+               safe_read "Enter new simultaneous connection limit: " new_limit
+               if [[ "$new_limit" =~ ^[0-9]+$ ]]; then
+                   local current_line=$(grep "^$username:" "$DB_FILE")
+                   local pass=$(echo "$current_line" | cut -d: -f2)
+                   local expiry=$(echo "$current_line" | cut -d: -f3)
+                   sed -i "s/^$username:.*/$username:$pass:$expiry:$new_limit/" "$DB_FILE"
+                   echo -e "\n${C_GREEN}✅ Connection limit for '$username' set to ${C_YELLOW}$new_limit${C_RESET}."
+               else
+                   echo -e "\n${C_RED}❌ Invalid limit.${C_RESET}"
+               fi
+               ;;
+            0)
+               echo -e "\n${C_GREEN}✅ Finished editing${C_RESET}"
+               echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+               safe_read "" dummy
+               return
+               ;;
+            *)
+               echo -e "\n${C_RED}❌ Invalid option.${C_RESET}"
+               ;;
+        esac
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue editing..."
+        safe_read "" dummy
+    done
+}
+
+lock_user() {
+    _select_user_interface "--- 🔒 Lock a User ---"
+    local u=$SELECTED_USER
+    if [[ "$u" == "NO_USERS" ]] || [[ -z "$u" ]]; then
+        if [[ "$u" == "NO_USERS" ]]; then
+            echo -e "\n${C_YELLOW}ℹ️ No users found in database.${C_RESET}"
+        fi
+        
+        local manual_user
+        safe_read "👉 Type username to MANUALLY lock (or '0' to cancel): " manual_user
+        if [[ "$manual_user" == "0" ]] || [[ -z "$manual_user" ]]; then
+            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+        u="$manual_user"
+        
+        if ! id "$u" &>/dev/null; then
+             echo -e "\n${C_RED}❌ Error: User '$u' does not exist on this system.${C_RESET}"
+             echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+             safe_read "" dummy
+             return
+        fi
+        
+        if grep -q "^$u:" "$DB_FILE"; then
+             echo -e "\n${C_YELLOW}ℹ️ User '$u' is in the database. Use the normal selection method.${C_RESET}"
+             echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+             safe_read "" dummy
+             return
+        else
+             echo -e "${C_YELLOW}⚠️ User '$u' exists on the system but is NOT in the database.${C_RESET}"
+        fi
+    fi
+
+    usermod -L "$u"
+    if [ $? -eq 0 ]; then
+        killall -u "$u" -9 &>/dev/null
+        echo -e "\n${C_GREEN}✅ User '$u' has been locked and active sessions killed.${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Failed to lock user '$u'.${C_RESET}"
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+unlock_user() {
+    _select_user_interface "--- 🔓 Unlock a User ---"
+    local u=$SELECTED_USER
+    if [[ "$u" == "NO_USERS" ]] || [[ -z "$u" ]]; then
+        if [[ "$u" == "NO_USERS" ]]; then
+            echo -e "\n${C_YELLOW}ℹ️ No users found in database.${C_RESET}"
+        fi
+        
+        local manual_user
+        safe_read "👉 Type username to MANUALLY unlock (or '0' to cancel): " manual_user
+        if [[ "$manual_user" == "0" ]] || [[ -z "$manual_user" ]]; then
+            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+            echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+            safe_read "" dummy
+            return
+        fi
+        u="$manual_user"
+        
+        if ! id "$u" &>/dev/null; then
+             echo -e "\n${C_RED}❌ Error: User '$u' does not exist on this system.${C_RESET}"
+             echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+             safe_read "" dummy
+             return
+        fi
+        
+        if grep -q "^$u:" "$DB_FILE"; then
+             echo -e "\n${C_YELLOW}ℹ️ User '$u' is in the database. Use the normal selection method.${C_RESET}"
+             echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+             safe_read "" dummy
+             return
+        else
+             echo -e "${C_YELLOW}⚠️ User '$u' exists on the system but is NOT in the database.${C_RESET}"
+        fi
+    fi
+
+    usermod -U "$u"
+    if [ $? -eq 0 ]; then
+        echo -e "\n${C_GREEN}✅ User '$u' has been unlocked.${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Failed to unlock user '$u'.${C_RESET}"
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+list_users() {
+    clear
+    show_banner
+    if [[ ! -s "$DB_FILE" ]]; then
+        echo -e "\n${C_YELLOW}ℹ️ No users are currently being managed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}                      📋 MANAGED USERS                          ${C_RESET}"
+    echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+    printf "${C_BOLD}${C_WHITE}%-20s | %-12s | %-10s | %-15s${C_RESET}\n" "USERNAME" "EXPIRES" "CONNECTIONS" "STATUS"
+    echo -e "${C_CYAN}───────────────────────────────────────────────────────────────${C_RESET}"
+    
+    while IFS=: read -r user pass expiry limit; do
+        [[ -z "$user" ]] && continue
+        
+        local online_count=0
+        if id "$user" &>/dev/null; then
+            online_count=$(pgrep -u "$user" sshd 2>/dev/null | wc -l)
+        fi
+        
+        local status=$(get_user_status "$user")
+        local connection_string="$online_count / $limit"
+        
+        printf "%-20s | ${C_YELLOW}%-12s${C_RESET} | ${C_CYAN}%-10s${C_RESET} | %s\n" \
+            "$user" "$expiry" "$connection_string" "$status"
+    done < "$DB_FILE"
+    echo -e "${C_CYAN}───────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "${C_DIM}Note: CONNECTIONS = Current / Max simultaneous connections${C_RESET}"
+    echo ""
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+renew_user() {
+    _select_user_interface "--- 🔄 Renew a User ---"
+    local u=$SELECTED_USER
+    if [[ "$u" == "NO_USERS" ]] || [[ -z "$u" ]]; then
+        return
+    fi
+    
+    local days
+    safe_read "👉 Enter number of days to extend the account: " days
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then
+        echo -e "\n${C_RED}❌ Invalid number.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local new_expire_date=$(date -d "+$days days" +%Y-%m-%d)
+    chage -E "$new_expire_date" "$u"
+    local line=$(grep "^$u:" "$DB_FILE")
+    local pass=$(echo "$line" | cut -d: -f2)
+    local limit=$(echo "$line" | cut -d: -f4)
+    sed -i "s/^$u:.*/$u:$pass:$new_expire_date:$limit/" "$DB_FILE"
+    echo -e "\n${C_GREEN}✅ User '$u' has been renewed. New expiration date is ${C_YELLOW}${new_expire_date}${C_RESET}."
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+# ========== SYSTEM UTILITIES FUNCTIONS ==========
+backup_user_data() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 💾 Backup User Data ---${C_RESET}"
+    
+    local backup_path
+    safe_read "👉 Enter path for backup file [/root/voltrontech_users.tar.gz]: " backup_path
+    backup_path=${backup_path:-/root/voltrontech_users.tar.gz}
+    
+    if [ ! -d "$DB_DIR" ] || [ ! -s "$DB_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ No user data found to back up.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    echo -e "\n${C_BLUE}⚙️ Backing up user database and settings to ${C_YELLOW}$backup_path${C_RESET}..."
+    tar -czf "$backup_path" -C "$(dirname "$DB_DIR")" "$(basename "$DB_DIR")"
+    if [ $? -eq 0 ]; then
+        echo -e "\n${C_GREEN}✅ SUCCESS: User data backup created at ${C_YELLOW}$backup_path${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ ERROR: Backup failed.${C_RESET}"
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+restore_user_data() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📥 Restore User Data ---${C_RESET}"
+    
+    local backup_path
+    safe_read "👉 Enter the full path to the user data backup file [/root/voltrontech_users.tar.gz]: " backup_path
+    backup_path=${backup_path:-/root/voltrontech_users.tar.gz}
+    
+    if [ ! -f "$backup_path" ]; then
+        echo -e "\n${C_RED}❌ ERROR: Backup file not found at '$backup_path'.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    echo -e "\n${C_RED}${C_BOLD}⚠️ WARNING:${C_RESET} This will overwrite all current users and settings."
+    local confirm
+    safe_read "👉 Are you absolutely sure you want to proceed? (y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then
+        echo -e "\n${C_YELLOW}❌ Restore cancelled.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local temp_dir=$(mktemp -d)
+    echo -e "\n${C_BLUE}⚙️ Extracting backup file to a temporary location...${C_RESET}"
+    tar -xzf "$backup_path" -C "$temp_dir"
+    if [ $? -ne 0 ]; then
+        echo -e "\n${C_RED}❌ ERROR: Failed to extract backup file. Aborting.${C_RESET}"
+        rm -rf "$temp_dir"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local restored_db_file="$temp_dir/voltrontech/users.db"
+    if [ ! -f "$restored_db_file" ]; then
+        echo -e "\n${C_RED}❌ ERROR: users.db not found in the backup. Cannot restore user accounts.${C_RESET}"
+        rm -rf "$temp_dir"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "${C_BLUE}⚙️ Overwriting current user database...${C_RESET}"
+    mkdir -p "$DB_DIR"
+    cp "$restored_db_file" "$DB_FILE"
+    
+    [ -d "$temp_dir/voltrontech/ssl" ] && cp -r "$temp_dir/voltrontech/ssl" "$DB_DIR/"
+    [ -d "$temp_dir/voltrontech/dnstt" ] && cp -r "$temp_dir/voltrontech/dnstt" "$DB_DIR/"
+    [ -f "$temp_dir/voltrontech/dns_info.conf" ] && cp "$temp_dir/voltrontech/dns_info.conf" "$DB_DIR/"
+    [ -f "$temp_dir/voltrontech/dnstt_info.conf" ] && cp "$temp_dir/voltrontech/dnstt_info.conf" "$DB_DIR/"
+    [ -f "$temp_dir/voltrontech/voltronproxy_config.conf" ] && cp "$temp_dir/voltrontech/voltronproxy_config.conf" "$DB_DIR/"
+    
+    echo -e "${C_BLUE}⚙️ Re-synchronizing system accounts with the restored database...${C_RESET}"
+    
+    while IFS=: read -r user pass expiry limit; do
+        echo "Processing user: ${C_YELLOW}$user${C_RESET}"
+        if ! id "$user" &>/dev/null; then
+            echo " - User does not exist in system. Creating..."
+            useradd -m -s /usr/sbin/nologin "$user"
+        fi
+        echo " - Setting password..."
+        echo "$user:$pass" | chpasswd
+        echo " - Setting expiration to $expiry..."
+        chage -E "$expiry" "$user"
+    done < "$DB_FILE"
+    
+    rm -rf "$temp_dir"
+    echo -e "\n${C_GREEN}✅ SUCCESS: User data restore completed.${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+cleanup_expired() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🧹 Cleanup Expired Users ---${C_RESET}"
+    
+    local expired_users=()
+    local current_ts=$(date +%s)
+
+    if [[ ! -s "$DB_FILE" ]]; then
+        echo -e "\n${C_GREEN}✅ User database is empty. No expired users found.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    while IFS=: read -r user pass expiry limit; do
+        local expiry_ts=$(date -d "$expiry" +%s 2>/dev/null || echo 0)
+        
+        if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
+            expired_users+=("$user")
+        fi
+    done < "$DB_FILE"
+
+    if [ ${#expired_users[@]} -eq 0 ]; then
+        echo -e "\n${C_GREEN}✅ No expired users found.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+
+    echo -e "\nThe following users have expired: ${C_RED}${expired_users[*]}${C_RESET}"
+    local confirm
+    safe_read "👉 Do you want to delete all of them? (y/n): " confirm
+
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        for user in "${expired_users[@]}"; do
+            echo " - Deleting ${C_YELLOW}$user...${C_RESET}"
+            killall -u "$user" -9 &>/dev/null
+            userdel -r "$user" &>/dev/null
+            sed -i "/^$user:/d" "$DB_FILE"
+        done
+        echo -e "\n${C_GREEN}✅ Expired users have been cleaned up.${C_RESET}"
+    else
+        echo -e "\n${C_YELLOW}❌ Cleanup cancelled.${C_RESET}"
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+# ========== CLOUDFLARE DNS GENERATION ==========
+generate_cloudflare_dns() {
+    echo -e "\n${C_BLUE}⚙️ Generating DNS records in Cloudflare...${C_RESET}"
+    
+    source "$DB_DIR/cloudflare.conf" 2>/dev/null || {
+        echo -e "${C_RED}❌ Cloudflare configuration not found.${C_RESET}"
+        return 1
+    }
+    
+    local SERVER_IPV4
+    SERVER_IPV4=$(curl -s -4 icanhazip.com)
+    if ! _is_valid_ipv4 "$SERVER_IPV4"; then
+        echo -e "\n${C_RED}❌ Error: Could not retrieve a valid public IPv4 address.${C_RESET}"
+        return 1
+    fi
+
+    local RANDOM_NS=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+    local RANDOM_TUN=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+    
+    local NS_SUBDOMAIN="ns-$RANDOM_NS"
+    local TUNNEL_SUBDOMAIN="tun-$RANDOM_TUN"
+    local NS_DOMAIN="$NS_SUBDOMAIN.$DOMAIN"
+    local TUNNEL_DOMAIN="$TUNNEL_SUBDOMAIN.$DOMAIN"
+    
+    echo -e "${C_BLUE}📝 Creating A record for $NS_DOMAIN...${C_RESET}"
+    local ns_record_id
+    ns_record_id=$(create_cloudflare_dns_record "A" "$NS_SUBDOMAIN" "$SERVER_IPV4")
+    
+    if [ -z "$ns_record_id" ]; then
+        echo -e "${C_RED}❌ Failed to create A record. Using custom mode fallback.${C_RESET}"
+        return 1
+    fi
+    
+    echo -e "${C_BLUE}📝 Creating NS record for $TUNNEL_DOMAIN pointing to $NS_DOMAIN...${C_RESET}"
+    local tunnel_record_id
+    tunnel_record_id=$(create_cloudflare_dns_record "NS" "$TUNNEL_SUBDOMAIN" "$NS_DOMAIN")
+    
+    if [ -z "$tunnel_record_id" ]; then
+        echo -e "${C_RED}❌ Failed to create NS record. Deleting A record...${C_RESET}"
+        delete_cloudflare_dns_record "$ns_record_id"
+        return 1
+    fi
+    
+    cat > "$DNS_INFO_FILE" <<EOF
+NS_DOMAIN="$NS_DOMAIN"
+TUNNEL_DOMAIN="$TUNNEL_DOMAIN"
+NS_RECORD_ID="$ns_record_id"
+TUNNEL_RECORD_ID="$tunnel_record_id"
+EOF
+    
+    echo -e "\n${C_GREEN}✅ DNS records created successfully in Cloudflare!${C_RESET}"
+    echo -e "  Nameserver: ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+    echo -e "  Tunnel Domain: ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+    
+    NS_DOMAIN_RET="$NS_DOMAIN"
+    TUNNEL_DOMAIN_RET="$TUNNEL_DOMAIN"
+    return 0
+}
+
+# ========== SHOW DNSTT DETAILS ==========
+show_dnstt_details() {
+    if [ -f "$DNSTT_CONFIG_FILE" ]; then
+        source "$DNSTT_CONFIG_FILE"
+        echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_GREEN}           📡 DNSTT CONNECTION DETAILS${C_RESET}"
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        echo -e "  ${C_CYAN}Public Key:${C_RESET}    ${C_YELLOW}$PUBLIC_KEY${C_RESET}"
+        if [[ -n "$FORWARD_DESC" ]]; then
+            echo -e "  ${C_CYAN}Forwarding To:${C_RESET} ${C_YELLOW}$FORWARD_DESC${C_RESET}"
+        fi
+        if [[ -n "$MTU_VALUE" ]]; then
+            echo -e "  ${C_CYAN}MTU Value:${C_RESET}     ${C_YELLOW}$MTU_VALUE${C_RESET}"
+        fi
+        echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_YELLOW}⚠️ IMPORTANT: Save this Public Key - you'll need it for clients!${C_RESET}"
+    else
+        echo -e "\n${C_YELLOW}ℹ️ DNSTT is not installed yet.${C_RESET}"
+    fi
+}
+
+# ========== DOWNLOAD DNSTT BINARY ==========
 download_dnstt_binary() {
     local arch=$(uname -m)
     local download_success=0
@@ -730,7 +1414,6 @@ install_dnstt() {
     echo -e "${C_BOLD}${C_PURPLE}           📡 DNSTT (DNS TUNNEL) INSTALLATION${C_RESET}"
     echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
     
-    # Check if already installed
     if [ -f "$DNSTT_SERVICE_FILE" ] && systemctl is-active --quiet dnstt.service; then
         echo -e "\n${C_YELLOW}ℹ️ DNSTT is already installed and running.${C_RESET}"
         show_dnstt_details
@@ -739,7 +1422,6 @@ install_dnstt() {
         return
     fi
     
-    # Step 1: Check port 53
     echo -e "\n${C_BLUE}[1/6] Checking port 53 availability...${C_RESET}"
     if ss -lunp | grep -q ':53\s'; then
         echo -e "${C_YELLOW}⚠️ Port 53 is in use. Stopping systemd-resolved...${C_RESET}"
@@ -752,7 +1434,6 @@ install_dnstt() {
         echo -e "${C_GREEN}✅ Port 53 is free${C_RESET}"
     fi
     
-    # Step 2: Choose forwarding target
     echo -e "\n${C_BLUE}[2/6] Choose forwarding target...${C_RESET}"
     echo -e "  ${C_GREEN}1)${C_RESET} SSH (port 22)"
     echo -e "  ${C_GREEN}2)${C_RESET} V2Ray (port 8787)"
@@ -774,7 +1455,6 @@ install_dnstt() {
     fi
     local FORWARD_TARGET="127.0.0.1:$forward_port"
     
-    # Step 3: DNS Method
     echo -e "\n${C_BLUE}[3/6] DNS Record Creation Method...${C_RESET}"
     echo -e "  ${C_GREEN}1)${C_RESET} Auto-generate with Cloudflare"
     echo -e "  ${C_GREEN}2)${C_RESET} Use custom domains (manual)"
@@ -816,15 +1496,12 @@ install_dnstt() {
         fi
     fi
     
-    # Step 4: MTU Selection
     echo -e "\n${C_BLUE}[4/6] MTU Selection...${C_RESET}"
     mtu_selection_during_install
     
-    # Step 5: Download DNSTT binary
     download_dnstt_binary
     if [ ! -f "$DNSTT_BINARY" ] || [ ! -s "$DNSTT_BINARY" ]; then
-        echo -e "\n${C_RED}❌ Failed to download DNSTT binary after multiple attempts.${C_RESET}"
-        echo -e "${C_YELLOW}Please check your internet connection.${C_RESET}"
+        echo -e "\n${C_RED}❌ Failed to download DNSTT binary.${C_RESET}"
         echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
         safe_read "" dummy
         return
@@ -833,7 +1510,6 @@ install_dnstt() {
     chmod +x "$DNSTT_BINARY"
     echo -e "${C_GREEN}✅ DNSTT binary downloaded successfully${C_RESET}"
     
-    # Step 6: Generate keys
     echo -e "\n${C_BLUE}[6/6] Generating cryptographic keys...${C_RESET}"
     mkdir -p "$DNSTT_KEYS_DIR"
     
@@ -851,7 +1527,6 @@ install_dnstt() {
     echo -e "${C_GREEN}✅ Keys generated successfully!${C_RESET}"
     echo -e "${C_YELLOW}Public Key: ${PUBLIC_KEY}${C_RESET}"
     
-    # Create systemd service
     echo -e "\n${C_BLUE}Creating systemd service...${C_RESET}"
     cat > "$DNSTT_SERVICE_FILE" <<EOF
 [Unit]
@@ -887,7 +1562,6 @@ EOF
         echo -e "${C_YELLOW}Check logs with: journalctl -u dnstt.service${C_RESET}"
     fi
     
-    # Show success message
     echo -e "\n${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
     echo -e "${C_GREEN}           ✅ DNSTT INSTALLED SUCCESSFULLY!${C_RESET}"
     echo -e "${C_GREEN}═══════════════════════════════════════════════════════════════${C_RESET}"
@@ -903,9 +1577,1120 @@ EOF
     safe_read "" dummy
 }
 
-# ========== REMAINING FUNCTIONS (USER MANAGEMENT, PROTOCOLS, ETC) ==========
-# [Previous functions for user management, protocols, etc remain the same]
-# [Due to length, I've omitted them but they are identical to previous version]
+uninstall_dnstt() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling DNSTT...${C_RESET}"
+    
+    systemctl stop dnstt.service 2>/dev/null
+    systemctl disable dnstt.service 2>/dev/null
+    
+    rm -f "$DNSTT_SERVICE_FILE"
+    rm -f "$DNSTT_BINARY"
+    rm -rf "$DNSTT_KEYS_DIR"
+    rm -f "$DNSTT_CONFIG_FILE"
+    
+    if [ -f "$DNS_INFO_FILE" ] && [ -f "$DB_DIR/cloudflare.conf" ]; then
+        source "$DB_DIR/cloudflare.conf"
+        source "$DNS_INFO_FILE"
+        if [ -n "$TUNNEL_RECORD_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo -e "${C_BLUE}Removing DNS records from Cloudflare...${C_RESET}"
+            delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+            delete_cloudflare_dns_record "$NS_RECORD_ID"
+            rm -f "$DNS_INFO_FILE"
+        fi
+    fi
+    
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ DNSTT uninstalled successfully${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+# ========== DNS MANAGEMENT MENU ==========
+dns_menu() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 DNS Domain Management (Cloudflare) ---${C_RESET}"
+    
+    if [ -f "$DNS_INFO_FILE" ]; then
+        source "$DNS_INFO_FILE"
+        echo -e "\nℹ️ DNS records already exist for this server:"
+        echo -e "  - ${C_CYAN}Nameserver:${C_RESET} ${C_YELLOW}$NS_DOMAIN${C_RESET}"
+        echo -e "  - ${C_CYAN}Tunnel Domain:${C_RESET} ${C_YELLOW}$TUNNEL_DOMAIN${C_RESET}"
+        echo
+        local choice
+        safe_read "👉 Do you want to DELETE these records? (y/n): " choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            source "$DB_DIR/cloudflare.conf" 2>/dev/null
+            if [ -n "$TUNNEL_RECORD_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+                delete_cloudflare_dns_record "$TUNNEL_RECORD_ID"
+                delete_cloudflare_dns_record "$NS_RECORD_ID"
+            fi
+            rm -f "$DNS_INFO_FILE"
+            echo -e "${C_GREEN}✅ DNS records deleted${C_RESET}"
+        else
+            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+        fi
+    else
+        echo -e "\nℹ️ No DNS records have been created yet."
+        echo
+        local choice
+        safe_read "👉 Do you want to generate new DNS records in Cloudflare? (y/n): " choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            generate_cloudflare_dns
+        else
+            echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+        fi
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+# ========== SSH BANNER MANAGEMENT ==========
+_enable_banner_in_sshd_config() {
+    echo -e "\n${C_BLUE}⚙️ Configuring sshd_config...${C_RESET}"
+    sed -i.bak -E 's/^( *Banner *).*/#\1/' /etc/ssh/sshd_config
+    if ! grep -q -E "^Banner $SSH_BANNER_FILE" /etc/ssh/sshd_config; then
+        echo -e "\n# VOLTRON TECH SSH Banner\nBanner $SSH_BANNER_FILE" >> /etc/ssh/sshd_config
+    fi
+    echo -e "${C_GREEN}✅ sshd_config updated.${C_RESET}"
+}
+
+_restart_ssh() {
+    echo -e "\n${C_BLUE}🔄 Restarting SSH service to apply changes...${C_RESET}"
+    local ssh_service_name=""
+    if [ -f /lib/systemd/system/sshd.service ]; then
+        ssh_service_name="sshd.service"
+    elif [ -f /lib/systemd/system/ssh.service ]; then
+        ssh_service_name="ssh.service"
+    else
+        echo -e "${C_RED}❌ Could not find sshd.service or ssh.service. Cannot restart SSH.${C_RESET}"
+        return 1
+    fi
+
+    systemctl restart "${ssh_service_name}"
+    if [ $? -eq 0 ]; then
+        echo -e "${C_GREEN}✅ SSH service ('${ssh_service_name}') restarted successfully.${C_RESET}"
+    else
+        echo -e "${C_RED}❌ Failed to restart SSH service ('${ssh_service_name}'). Please check 'journalctl -u ${ssh_service_name}' for errors.${C_RESET}"
+    fi
+}
+
+set_ssh_banner_paste() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 📋 Paste SSH Banner ---${C_RESET}"
+    echo -e "Paste your banner code below. Press ${C_YELLOW}[Ctrl+D]${C_RESET} when you are finished."
+    echo -e "${C_DIM}The current banner (if any) will be overwritten.${C_RESET}"
+    echo -e "--------------------------------------------------"
+    cat > "$SSH_BANNER_FILE"
+    chmod 644 "$SSH_BANNER_FILE"
+    echo -e "\n--------------------------------------------------"
+    echo -e "\n${C_GREEN}✅ Banner content saved from paste.${C_RESET}"
+    _enable_banner_in_sshd_config
+    _restart_ssh
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to return..."
+    safe_read "" dummy
+}
+
+view_ssh_banner() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 👁️ Current SSH Banner ---${C_RESET}"
+    if [ -f "$SSH_BANNER_FILE" ]; then
+        echo -e "\n${C_CYAN}--- BEGIN BANNER ---${C_RESET}"
+        cat "$SSH_BANNER_FILE"
+        echo -e "${C_CYAN}---- END BANNER ----${C_RESET}"
+    else
+        echo -e "\n${C_YELLOW}ℹ️ No banner file found at $SSH_BANNER_FILE.${C_RESET}"
+    fi
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to return..."
+    safe_read "" dummy
+}
+
+remove_ssh_banner() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🗑️ Remove SSH Banner ---${C_RESET}"
+    local confirm
+    safe_read "👉 Are you sure you want to disable and remove the SSH banner? (y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then
+        echo -e "\n${C_YELLOW}❌ Action cancelled.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to return..."
+        safe_read "" dummy
+        return
+    fi
+    if [ -f "$SSH_BANNER_FILE" ]; then
+        rm -f "$SSH_BANNER_FILE"
+        echo -e "\n${C_GREEN}✅ Removed banner file: $SSH_BANNER_FILE${C_RESET}"
+    else
+        echo -e "\n${C_YELLOW}ℹ️ No banner file to remove.${C_RESET}"
+    fi
+    echo -e "\n${C_BLUE}⚙️ Disabling banner in sshd_config...${C_RESET}"
+    sed -i.bak -E "s/^( *Banner\s+$SSH_BANNER_FILE)/#\1/" /etc/ssh/sshd_config
+    echo -e "${C_GREEN}✅ Banner disabled in configuration.${C_RESET}"
+    _restart_ssh
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to return..."
+    safe_read "" dummy
+}
+
+ssh_banner_menu() {
+    while true; do
+        clear
+        show_banner
+        local banner_status
+        if grep -q -E "^\s*Banner\s+$SSH_BANNER_FILE" /etc/ssh/sshd_config && [ -f "$SSH_BANNER_FILE" ]; then
+            banner_status="${C_STATUS_A}(Active)${C_RESET}"
+        else
+            banner_status="${C_STATUS_I}(Inactive)${C_RESET}"
+        fi
+        
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}              🎨 SSH Banner Management ${banner_status}${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} 📋 Paste or Edit Banner"
+        echo -e "  ${C_GREEN}2)${C_RESET} 👁️ View Current Banner"
+        echo -e "  ${C_RED}3)${C_RESET} 🗑️ Disable and Remove Banner"
+        echo -e "  ${C_RED}0)${C_RESET} ↩️ Return to Main Menu"
+        echo ""
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
+        case $choice in
+            1) set_ssh_banner_paste ;;
+            2) view_ssh_banner ;;
+            3) remove_ssh_banner ;;
+            0) return ;;
+            *) echo -e "\n${C_RED}❌ Invalid option.${C_RESET}" && sleep 2 ;;
+        esac
+    done
+}
+
+# ========== PROTOCOL FUNCTIONS ==========
+install_badvpn() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Installing badvpn (udpgw) ---${C_RESET}"
+    
+    if [ -f "$BADVPN_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ badvpn is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📦 Installing dependencies...${C_RESET}"
+    apt-get update
+    apt-get install -y cmake g++ make screen git build-essential
+    
+    echo -e "\n${C_GREEN}📥 Cloning badvpn repository...${C_RESET}"
+    git clone https://github.com/ambrop72/badvpn.git "$BADVPN_BUILD_DIR"
+    
+    cd "$BADVPN_BUILD_DIR"
+    echo -e "\n${C_GREEN}⚙️ Compiling badvpn...${C_RESET}"
+    cmake .
+    make
+    
+    local badvpn_binary=$(find "$BADVPN_BUILD_DIR" -name "badvpn-udpgw" -type f | head -n 1)
+    
+    if [ -z "$badvpn_binary" ]; then
+        echo -e "\n${C_RED}❌ Failed to compile badvpn.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    cp "$badvpn_binary" /usr/local/bin/badvpn-udpgw
+    chmod +x /usr/local/bin/badvpn-udpgw
+    
+    cat > "$BADVPN_SERVICE_FILE" <<EOF
+[Unit]
+Description=BadVPN UDP Gateway
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300 --max-clients 1000
+User=root
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable badvpn.service
+    systemctl start badvpn.service
+    
+    echo -e "\n${C_GREEN}✅ badvpn installed and started successfully!${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_badvpn() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling badvpn...${C_RESET}"
+    systemctl stop badvpn.service 2>/dev/null
+    systemctl disable badvpn.service 2>/dev/null
+    rm -f "$BADVPN_SERVICE_FILE"
+    rm -f /usr/local/bin/badvpn-udpgw
+    rm -rf "$BADVPN_BUILD_DIR"
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ badvpn uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_udp_custom() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Installing udp-custom ---${C_RESET}"
+    
+    if [ -f "$UDP_CUSTOM_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ udp-custom is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    mkdir -p "$UDP_CUSTOM_DIR"
+    
+    echo -e "\n${C_GREEN}⚙️ Detecting architecture...${C_RESET}"
+    local arch=$(uname -m)
+    local binary_url=""
+    
+    if [[ "$arch" == "x86_64" ]]; then
+        binary_url="https://github.com/voltrontech/udp-custom/releases/latest/download/udp-custom-linux-amd64"
+    elif [[ "$arch" == "aarch64" ]]; then
+        binary_url="https://github.com/voltrontech/udp-custom/releases/latest/download/udp-custom-linux-arm64"
+    else
+        echo -e "\n${C_RED}❌ Unsupported architecture: $arch${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading udp-custom...${C_RESET}"
+    curl -L -o "$UDP_CUSTOM_DIR/udp-custom" "$binary_url"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "\n${C_RED}❌ Failed to download udp-custom.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    chmod +x "$UDP_CUSTOM_DIR/udp-custom"
+    
+    cat > "$UDP_CUSTOM_DIR/config.json" <<EOF
+{
+  "listen": ":36712",
+  "stream_buffer": 33554432,
+  "receive_buffer": 83886080,
+  "auth": {
+    "mode": "passwords"
+  }
+}
+EOF
+
+    cat > "$UDP_CUSTOM_SERVICE_FILE" <<EOF
+[Unit]
+Description=UDP Custom
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$UDP_CUSTOM_DIR
+ExecStart=$UDP_CUSTOM_DIR/udp-custom server -exclude 53,5300
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable udp-custom.service
+    systemctl start udp-custom.service
+    
+    echo -e "\n${C_GREEN}✅ udp-custom installed and started successfully!${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_udp_custom() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling udp-custom...${C_RESET}"
+    systemctl stop udp-custom.service 2>/dev/null
+    systemctl disable udp-custom.service 2>/dev/null
+    rm -f "$UDP_CUSTOM_SERVICE_FILE"
+    rm -rf "$UDP_CUSTOM_DIR"
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ udp-custom uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_ssl_tunnel() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🔒 Installing SSL Tunnel (HAProxy) ---${C_RESET}"
+    
+    if ! command -v haproxy &> /dev/null; then
+        echo -e "\n${C_GREEN}📦 Installing HAProxy...${C_RESET}"
+        apt-get update
+        apt-get install -y haproxy
+    fi
+    
+    if [ -f "$SSL_CERT_FILE" ]; then
+        echo -e "\n${C_YELLOW}⚠️ SSL certificate already exists.${C_RESET}"
+        local overwrite
+        safe_read "Overwrite? (y/n): " overwrite
+        if [[ "$overwrite" == "y" ]]; then
+            rm -f "$SSL_CERT_FILE"
+        fi
+    fi
+    
+    if [ ! -f "$SSL_CERT_FILE" ]; then
+        echo -e "\n${C_GREEN}🔐 Generating self-signed SSL certificate...${C_RESET}"
+        mkdir -p "$SSL_CERT_DIR"
+        openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -keyout "$SSL_CERT_FILE" -out "$SSL_CERT_FILE" \
+            -subj "/CN=VOLTRON TECH" 2>/dev/null
+    fi
+    
+    local ssl_port
+    safe_read "👉 Enter port for SSL tunnel [444]: " ssl_port
+    ssl_port=${ssl_port:-444}
+    
+    cat > "$HAPROXY_CONFIG" <<EOF
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    option dontlognull
+    timeout connect 5000
+    timeout client 50000
+    timeout server 50000
+
+frontend ssh_ssl_in
+    bind *:$ssl_port ssl crt $SSL_CERT_FILE
+    mode tcp
+    default_backend ssh_backend
+
+backend ssh_backend
+    mode tcp
+    server ssh_server 127.0.0.1:22
+EOF
+
+    systemctl restart haproxy
+    
+    echo -e "\n${C_GREEN}✅ SSL Tunnel installed on port $ssl_port${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_ssl_tunnel() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling SSL Tunnel...${C_RESET}"
+    systemctl stop haproxy 2>/dev/null
+    apt-get remove -y haproxy 2>/dev/null
+    rm -f "$HAPROXY_CONFIG"
+    rm -f "$SSL_CERT_FILE"
+    echo -e "${C_GREEN}✅ SSL Tunnel uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_voltron_proxy() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🦅 Installing VOLTRON TECH Proxy ---${C_RESET}"
+    
+    if [ -f "$VOLTRONPROXY_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ VOLTRON Proxy is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local ports
+    safe_read "👉 Enter port(s) [8080]: " ports
+    ports=${ports:-8080}
+    
+    local arch=$(uname -m)
+    local binary_url=""
+    
+    if [[ "$arch" == "x86_64" ]]; then
+        binary_url="https://github.com/HumbleTechtz/voltron-tech/releases/latest/download/voltronproxy"
+    elif [[ "$arch" == "aarch64" ]]; then
+        binary_url="https://github.com/HumbleTechtz/voltron-tech/releases/latest/download/voltronproxyarm"
+    else
+        echo -e "\n${C_RED}❌ Unsupported architecture${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading VOLTRON Proxy...${C_RESET}"
+    curl -L -o "$VOLTRONPROXY_BINARY" "$binary_url"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "\n${C_RED}❌ Failed to download${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    chmod +x "$VOLTRONPROXY_BINARY"
+    
+    cat > "$VOLTRONPROXY_SERVICE_FILE" <<EOF
+[Unit]
+Description=VOLTRON TECH Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=$VOLTRONPROXY_BINARY -p $ports
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable voltronproxy.service
+    systemctl start voltronproxy.service
+    
+    echo "$ports" > "$VOLTRONPROXY_CONFIG_FILE"
+    
+    echo -e "\n${C_GREEN}✅ VOLTRON Proxy installed on port(s) $ports${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_voltron_proxy() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling VOLTRON Proxy...${C_RESET}"
+    systemctl stop voltronproxy.service 2>/dev/null
+    systemctl disable voltronproxy.service 2>/dev/null
+    rm -f "$VOLTRONPROXY_SERVICE_FILE"
+    rm -f "$VOLTRONPROXY_BINARY"
+    rm -f "$VOLTRONPROXY_CONFIG_FILE"
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ VOLTRON Proxy uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_nginx_proxy() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🌐 Installing Nginx Proxy ---${C_RESET}"
+    
+    if ! command -v nginx &> /dev/null; then
+        echo -e "\n${C_GREEN}📦 Installing Nginx...${C_RESET}"
+        apt-get update
+        apt-get install -y nginx
+    fi
+    
+    mkdir -p /etc/ssl/certs /etc/ssl/private
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/ssl/private/nginx-selfsigned.key \
+        -out /etc/ssl/certs/nginx-selfsigned.pem \
+        -subj "/CN=VOLTRON TECH" 2>/dev/null
+    
+    cat > "$NGINX_CONFIG_FILE" <<'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    
+    ssl_certificate /etc/ssl/certs/nginx-selfsigned.pem;
+    ssl_certificate_key /etc/ssl/private/nginx-selfsigned.key;
+    
+    server_name _;
+    
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+EOF
+
+    systemctl restart nginx
+    
+    echo -e "\n${C_GREEN}✅ Nginx Proxy installed${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_nginx_proxy() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling Nginx Proxy...${C_RESET}"
+    systemctl stop nginx 2>/dev/null
+    apt-get remove -y nginx 2>/dev/null
+    rm -f "$NGINX_CONFIG_FILE"
+    echo -e "${C_GREEN}✅ Nginx Proxy uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_zivpn() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🛡️ Installing ZiVPN ---${C_RESET}"
+    
+    if [ -f "$ZIVPN_SERVICE_FILE" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ ZiVPN is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    local arch=$(uname -m)
+    local binary_url=""
+    
+    if [[ "$arch" == "x86_64" ]]; then
+        binary_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-amd64"
+    elif [[ "$arch" == "aarch64" ]]; then
+        binary_url="https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-arm64"
+    else
+        echo -e "\n${C_RED}❌ Unsupported architecture${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading ZiVPN...${C_RESET}"
+    curl -L -o "$ZIVPN_BIN" "$binary_url"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "\n${C_RED}❌ Failed to download${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    chmod +x "$ZIVPN_BIN"
+    mkdir -p "$ZIVPN_DIR"
+    
+    openssl req -x509 -newkey rsa:4096 -nodes -days 365 \
+        -keyout "$ZIVPN_KEY_FILE" -out "$ZIVPN_CERT_FILE" \
+        -subj "/CN=ZiVPN" 2>/dev/null
+    
+    local passwords
+    safe_read "👉 Enter passwords (comma-separated) [user1,user2]: " passwords
+    passwords=${passwords:-user1,user2}
+    
+    IFS=',' read -ra pass_array <<< "$passwords"
+    local json_passwords=$(printf '"%s",' "${pass_array[@]}")
+    json_passwords="[${json_passwords%,}]"
+    
+    cat > "$ZIVPN_CONFIG_FILE" <<EOF
+{
+  "listen": ":5667",
+  "cert": "$ZIVPN_CERT_FILE",
+  "key": "$ZIVPN_KEY_FILE",
+  "obfs": "zivpn",
+  "auth": {
+    "mode": "passwords",
+    "config": $json_passwords
+  }
+}
+EOF
+
+    cat > "$ZIVPN_SERVICE_FILE" <<EOF
+[Unit]
+Description=ZiVPN Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$ZIVPN_DIR
+ExecStart=$ZIVPN_BIN server -c $ZIVPN_CONFIG_FILE
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable zivpn.service
+    systemctl start zivpn.service
+    
+    echo -e "\n${C_GREEN}✅ ZiVPN installed on port 5667${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_zivpn() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling ZiVPN...${C_RESET}"
+    systemctl stop zivpn.service 2>/dev/null
+    systemctl disable zivpn.service 2>/dev/null
+    rm -f "$ZIVPN_SERVICE_FILE"
+    rm -f "$ZIVPN_BIN"
+    rm -rf "$ZIVPN_DIR"
+    systemctl daemon-reload
+    echo -e "${C_GREEN}✅ ZiVPN uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_xui_panel() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 💻 Installing X-UI Panel ---${C_RESET}"
+    
+    if command -v x-ui &> /dev/null; then
+        echo -e "\n${C_YELLOW}ℹ️ X-UI is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading X-UI installer...${C_RESET}"
+    bash <(curl -Ls https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh)
+    
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+uninstall_xui_panel() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling X-UI Panel...${C_RESET}"
+    if command -v x-ui &> /dev/null; then
+        x-ui uninstall
+    fi
+    rm -f /usr/local/bin/x-ui
+    rm -rf /etc/x-ui
+    rm -rf /usr/local/x-ui
+    echo -e "${C_GREEN}✅ X-UI uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+install_dt_proxy_full() {
+    clear
+    show_banner
+    echo -e "${C_BOLD}${C_PURPLE}--- 🚀 Installing DT Proxy ---${C_RESET}"
+    
+    if [ -f "/usr/local/bin/main" ]; then
+        echo -e "\n${C_YELLOW}ℹ️ DT Proxy is already installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+        return
+    fi
+    
+    echo -e "\n${C_GREEN}📥 Downloading DT Proxy installer...${C_RESET}"
+    curl -sL https://raw.githubusercontent.com/voltrontech/ProxyMods/main/install.sh | bash
+    
+    if [ $? -eq 0 ]; then
+        echo -e "\n${C_GREEN}✅ DT Proxy installed successfully${C_RESET}"
+    else
+        echo -e "\n${C_RED}❌ Installation failed${C_RESET}"
+    fi
+    
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+launch_dt_proxy_menu() {
+    if [ -f "/usr/local/bin/main" ]; then
+        clear
+        /usr/local/bin/main
+    else
+        echo -e "\n${C_RED}❌ DT Proxy is not installed.${C_RESET}"
+        echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+        safe_read "" dummy
+    fi
+}
+
+uninstall_dt_proxy_full() {
+    echo -e "\n${C_BLUE}🗑️ Uninstalling DT Proxy...${C_RESET}"
+    
+    systemctl stop proxy-*.service 2>/dev/null
+    systemctl disable proxy-*.service 2>/dev/null
+    rm -f /etc/systemd/system/proxy-*.service
+    
+    rm -f /usr/local/bin/proxy
+    rm -f /usr/local/bin/main
+    rm -f /usr/local/bin/install_mod
+    
+    systemctl daemon-reload
+    
+    echo -e "${C_GREEN}✅ DT Proxy uninstalled${C_RESET}"
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+dt_proxy_menu() {
+    while true; do
+        clear
+        show_banner
+        local status=""
+        [ -f "/usr/local/bin/main" ] && status="${C_BLUE}(installed)${C_RESET}"
+        
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}              🚀 DT PROXY MANAGEMENT ${status}${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} Install DT Proxy"
+        echo -e "  ${C_GREEN}2)${C_RESET} Launch DT Proxy Menu"
+        echo -e "  ${C_RED}3)${C_RESET} Uninstall DT Proxy"
+        echo -e "  ${C_RED}0)${C_RESET} Return"
+        echo ""
+        
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select option: "${C_RESET})" choice
+        
+        case $choice in
+            1) install_dt_proxy_full ;;
+            2) launch_dt_proxy_menu ;;
+            3) uninstall_dt_proxy_full ;;
+            0) return ;;
+            *) echo -e "\n${C_RED}❌ Invalid option${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+check_dt_proxy_status() {
+    if [ -f "/usr/local/bin/main" ]; then
+        echo -e "${C_BLUE}(installed)${C_RESET}"
+    else
+        echo ""
+    fi
+}
+
+# ========== PROTOCOL MENU ==========
+protocol_menu() {
+    while true; do
+        clear
+        show_banner
+        
+        local badvpn_status=$(check_service "badvpn")
+        local udp_status=$(check_service "udp-custom")
+        local haproxy_status=$(check_service "haproxy")
+        local dnstt_status=$(check_service "dnstt")
+        local voltronproxy_status=$(check_service "voltronproxy")
+        local nginx_status=$(check_service "nginx")
+        local zivpn_status=$(check_service "zivpn")
+        local xui_status=$(command -v x-ui &>/dev/null && echo -e "${C_BLUE}(installed)${C_RESET}" || echo "")
+        
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}              🔌 PROTOCOL & PANEL MANAGEMENT${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "  ${C_GREEN}1)${C_RESET} badvpn (UDP 7300) $badvpn_status"
+        echo -e "  ${C_GREEN}2)${C_RESET} udp-custom $udp_status"
+        echo -e "  ${C_GREEN}3)${C_RESET} SSL Tunnel (HAProxy) $haproxy_status"
+        echo -e "  ${C_GREEN}4)${C_RESET} DNSTT (Port 53) $dnstt_status"
+        echo -e "  ${C_GREEN}5)${C_RESET} VOLTRON Proxy $voltronproxy_status"
+        echo -e "  ${C_GREEN}6)${C_RESET} Nginx Proxy $nginx_status"
+        echo -e "  ${C_GREEN}7)${C_RESET} ZiVPN $zivpn_status"
+        echo -e "  ${C_GREEN}8)${C_RESET} X-UI Panel $xui_status"
+        echo -e "  ${C_GREEN}9)${C_RESET} DT Proxy $(check_dt_proxy_status)"
+        echo -e ""
+        echo -e "  ${C_RED}0)${C_RESET} Return"
+        echo ""
+        
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select protocol to manage: "${C_RESET})" choice
+        
+        case $choice in
+            1)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_badvpn
+                elif [ "$sub" == "2" ]; then uninstall_badvpn
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            2)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_udp_custom
+                elif [ "$sub" == "2" ]; then uninstall_udp_custom
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            3)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_ssl_tunnel
+                elif [ "$sub" == "2" ]; then uninstall_ssl_tunnel
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            4)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_GREEN}2)${C_RESET} View Details"
+                echo -e "  ${C_RED}3)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_dnstt
+                elif [ "$sub" == "2" ]; then show_dnstt_details; echo -e "\nPress Enter"; safe_read "" dummy
+                elif [ "$sub" == "3" ]; then uninstall_dnstt
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            5)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_voltron_proxy
+                elif [ "$sub" == "2" ]; then uninstall_voltron_proxy
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            6)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_nginx_proxy
+                elif [ "$sub" == "2" ]; then uninstall_nginx_proxy
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            7)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_zivpn
+                elif [ "$sub" == "2" ]; then uninstall_zivpn
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            8)
+                echo -e "\n  ${C_GREEN}1)${C_RESET} Install"
+                echo -e "  ${C_RED}2)${C_RESET} Uninstall"
+                safe_read "👉 Choose: " sub
+                if [ "$sub" == "1" ]; then install_xui_panel
+                elif [ "$sub" == "2" ]; then uninstall_xui_panel
+                else echo -e "${C_RED}Invalid${C_RESET}"; sleep 2; fi
+                ;;
+            9)
+                dt_proxy_menu
+                ;;
+            0) return ;;
+            *) echo -e "\n${C_RED}❌ Invalid option${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+# ========== LIMITER SERVICE SETUP ==========
+setup_limiter_service() {
+    cat > "$LIMITER_SCRIPT" << 'EOF'
+#!/bin/bash
+DB_FILE="/etc/voltrontech/users.db"
+
+while true; do
+    if [[ ! -f "$DB_FILE" ]]; then
+        sleep 10
+        continue
+    fi
+    current_ts=$(date +%s)
+    while IFS=: read -r user pass expiry limit; do
+        [[ -z "$user" || "$user" == \#* ]] && continue
+        
+        expiry_ts=$(date -d "$expiry" +%s 2>/dev/null || echo 0)
+        if [[ $expiry_ts -lt $current_ts && $expiry_ts -ne 0 ]]; then
+            if ! passwd -S "$user" | grep -q " L "; then
+                usermod -L "$user" &>/dev/null
+            fi
+            if pgrep -u "$user" > /dev/null; then
+                killall -u "$user" -9 &>/dev/null
+            fi
+            continue
+        fi
+        
+        online_count=$(pgrep -u "$user" sshd | wc -l)
+        if ! [[ "$limit" =~ ^[0-9]+$ ]]; then limit=1; fi
+        
+        if [[ "$online_count" -gt "$limit" ]]; then
+            if ! passwd -S "$user" | grep -q " L "; then
+                usermod -L "$user" &>/dev/null
+                killall -u "$user" -9 &>/dev/null
+                (sleep 120; usermod -U "$user" &>/dev/null) &
+            else
+                killall -u "$user" -9 &>/dev/null
+            fi
+        fi
+    done < "$DB_FILE"
+    sleep 3
+done
+EOF
+    chmod +x "$LIMITER_SCRIPT"
+
+    cat > "$LIMITER_SERVICE" << EOF
+[Unit]
+Description=VOLTRON TECH Active User Limiter
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$LIMITER_SCRIPT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    if ! systemctl is-active --quiet voltrontech-limiter; then
+        systemctl daemon-reload
+        systemctl enable voltrontech-limiter &>/dev/null
+        systemctl start voltrontech-limiter &>/dev/null
+    else
+        systemctl restart voltrontech-limiter &>/dev/null
+    fi
+}
+
+# ========== INITIAL SETUP ==========
+initial_setup() {
+    mkdir -p "$DB_DIR"
+    mkdir -p "$DB_DIR/config"
+    mkdir -p "$DB_DIR/cache"
+    touch "$DB_FILE"
+    mkdir -p "$SSL_CERT_DIR"
+    
+    cat > "$DB_DIR/cloudflare.conf" <<EOF
+CLOUDFLARE_EMAIL="$CLOUDFLARE_EMAIL"
+CLOUDFLARE_ZONE_ID="$CLOUDFLARE_ZONE_ID"
+CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN"
+DOMAIN="$DOMAIN"
+EOF
+    
+    setup_limiter_service
+    if [ ! -f "$INSTALL_FLAG_FILE" ]; then
+        touch "$INSTALL_FLAG_FILE"
+    fi
+    
+    get_ip_info
+    
+    install_voltron_booster
+}
+
+# ========== UNINSTALL SCRIPT ==========
+uninstall_script() {
+    clear
+    show_banner
+    echo -e "${C_RED}=====================================================${C_RESET}"
+    echo -e "${C_RED}       🔥 DANGER: UNINSTALL SCRIPT & ALL DATA 🔥      ${C_RESET}"
+    echo -e "${C_RED}=====================================================${C_RESET}"
+    echo -e "${C_YELLOW}This will PERMANENTLY remove this script and all its components."
+    echo -e "\n${C_RED}This action is irreversible.${C_RESET}"
+    echo ""
+    local confirm
+    safe_read "👉 Type 'yes' to confirm and proceed with uninstallation: " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        echo -e "\n${C_GREEN}✅ Uninstallation cancelled.${C_RESET}"
+        return
+    fi
+    export UNINSTALL_MODE="silent"
+    echo -e "\n${C_BLUE}--- 💥 Starting Uninstallation 💥 ---${C_RESET}"
+    
+    for service in voltrontech-limiter voltron-loss-protect voltron-traffic dnstt badvpn udp-custom haproxy voltronproxy nginx zivpn; do
+        systemctl stop $service.service 2>/dev/null
+        systemctl disable $service.service 2>/dev/null
+    done
+    
+    rm -f /etc/systemd/system/voltron*.service
+    rm -f /etc/systemd/system/dnstt*.service
+    rm -f /etc/systemd/system/badvpn*.service
+    rm -f /etc/systemd/system/udp-custom*.service
+    
+    rm -f /usr/local/bin/voltron*
+    rm -f /usr/local/bin/dnstt-server
+    rm -f /usr/local/bin/badvpn-udpgw
+    rm -f /usr/local/bin/zivpn
+    rm -rf "$DB_DIR"
+    rm -f /usr/local/bin/menu
+    
+    systemctl daemon-reload
+    
+    echo -e "\n${C_GREEN}=============================================${C_RESET}"
+    echo -e "${C_GREEN}      Script has been successfully uninstalled.     ${C_RESET}"
+    echo -e "${C_GREEN}=============================================${C_RESET}"
+    exit 0
+}
+
+press_enter() {
+    echo -e "\nPress ${C_YELLOW}[Enter]${C_RESET} to continue..."
+    safe_read "" dummy
+}
+
+invalid_option() {
+    echo -e "\n${C_RED}❌ Invalid option.${C_RESET}" && sleep 2
+}
+
+# ========== ROOT CHECK ==========
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${C_RED}❌ Error: This script must be run as root.${C_RESET}"
+   exit 1
+fi
+
+# ========== MAIN MENU FUNCTION ==========
+main_menu() {
+    initial_setup
+    while true; do
+        export UNINSTALL_MODE="interactive"
+        show_banner
+        
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}                    👤 USER MANAGEMENT                         ${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "1" "Create New User" "5" "Unlock User Account"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "2" "Delete User" "6" "List All Managed Users"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "3" "Edit User Details" "7" "Renew User Account"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s\n" "4" "Lock User Account"
+        
+        echo ""
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}                    ⚙️ SYSTEM UTILITIES                        ${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "8" "Protocols & Panels" "12" "SSH Banner"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "9" "Backup Users" "13" "Cleanup Expired"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "10" "Restore Users" "14" "MTU Optimization"
+        printf "  ${C_GREEN}%2s${C_RESET}) %-25s  ${C_GREEN}%2s${C_RESET}) %-25s\n" "11" "DNS Domain" "15" "DT Proxy"
+
+        echo ""
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}                    🔥 DANGER ZONE                            ${C_RESET}"
+        echo -e "${C_BOLD}${C_PURPLE}═══════════════════════════════════════════════════════════════${C_RESET}"
+        printf "  ${C_RED}%2s${C_RESET}) %-28s  ${C_RED}%2s${C_RESET}) %-25s\n" "99" "Uninstall Script" "0" "Exit"
+
+        echo ""
+        local choice
+        safe_read "$(echo -e ${C_PROMPT}"👉 Select an option: "${C_RESET})" choice
+        
+        case $choice in
+            1) create_user ;;
+            2) delete_user ;;
+            3) edit_user ;;
+            4) lock_user ;;
+            5) unlock_user ;;
+            6) list_users ;;
+            7) renew_user ;;
+            8) protocol_menu ;;
+            9) backup_user_data ;;
+            10) restore_user_data ;;
+            11) dns_menu ;;
+            12) ssh_banner_menu ;;
+            13) cleanup_expired ;;
+            14) mtu_optimization_menu ;;
+            15) dt_proxy_menu ;;
+            99) uninstall_script ;;
+            0) echo -e "\n${C_BLUE}👋 Goodbye!${C_RESET}"; exit 0 ;;
+            *) invalid_option ;;
+        esac
+    done
+}
 
 # ========== START ==========
 if [[ "$1" == "--install-setup" ]]; then
