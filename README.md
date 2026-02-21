@@ -343,7 +343,7 @@ If you find this project useful, please consider giving it a ⭐ on GitHub!
 
 <p align="center">
   <b>Made with ❤️ in Tanzania</b><br>
-  <i>VOLTRON TECH - Always Remember X</i>
+  <i>VOLTRON TECH - GLOBAL TECHNOLOGY</i>
 </p>
 
 <p align="center">
